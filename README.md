@@ -43,11 +43,17 @@ OmniPkg uses a source only when its tools are installed.
 
 ## Installation
 
-From the project directory:
+Quickstart:
 
 ```bash
+git clone https://github.com/YOUR-USER/OmniPkg.git
+cd OmniPkg
 ./install.sh
 ```
+
+`install.sh` may ask for your password when it installs dependencies or writes
+the optional sudoers helper. If you want to install only the local app files and
+menu entry, use `./install.sh --skip-deps --no-sudoers`.
 
 The installer copies OmniPkg to:
 

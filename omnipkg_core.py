@@ -45,7 +45,7 @@ BIN_DIR = Path.home() / ".local" / "bin"
 APPLICATIONS_DIR = DATA_HOME / "applications"
 ICON_DIR = DATA_HOME / "icons" / "hicolor" / "512x512" / "apps"
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9@._+:/=-]+$")
-SOURCE_ORDER = ("apt", "pacman", "aur", "flatpak", "snap", "brew", "npm", "pip", "manual")
+SOURCE_ORDER = ("apt", "pacman", "aur", "flatpak", "snap", "brew", "npm", "pip", "manual", "desktop")
 DESKTOP_DIRS = (
     Path("/usr/share/applications"),
     Path("/usr/local/share/applications"),
@@ -59,6 +59,14 @@ APPSTREAM_ICON_DIRS = (
     Path("/usr/share/swcatalog/icons"),
     Path("/var/cache/app-info/icons"),
     Path("/usr/share/app-info/icons"),
+)
+ICON_LOOKUP_DIRS = (
+    DATA_HOME / "icons",
+    DATA_HOME / "pixmaps",
+    Path("/usr/local/share/icons"),
+    Path("/usr/share/icons"),
+    Path("/usr/local/share/pixmaps"),
+    Path("/usr/share/pixmaps"),
 )
 
 
@@ -359,7 +367,7 @@ def package_owners(paths: list[str], source: str) -> dict[str, str]:
     owners: dict[str, str] = {}
     if source in {"pacman", "aur"} and which("pacman"):
         code, output = run_capture(["pacman", "-Qo", *paths], timeout=45)
-        if code not in (0, 1):
+        if code == 127:
             return owners
         for line in output.splitlines():
             match = re.match(r"^(.+) is owned by (\S+) ", line)
@@ -406,6 +414,10 @@ def desktop_package_index() -> dict[tuple[str, str], dict[str, Any]]:
             enriched = {**item, "source": source, "package": package, "gui": True}
             index[(source, package)] = enriched
             index[(source, desktop_id.removesuffix(".desktop"))] = enriched
+        elif source_hint == "desktop":
+            package = desktop_id.removesuffix(".desktop")
+            enriched = {**item, "source": "desktop", "package": package, "gui": True}
+            index[("desktop", package)] = enriched
     return index
 
 
@@ -427,7 +439,48 @@ def find_appstream_icon(icon: str) -> str:
                 for path in directory.rglob(candidate + suffix):
                     if path.is_file():
                         return str(path)
-    return icon
+    return find_theme_icon(icon) or icon
+
+
+def find_theme_icon(icon: str) -> str:
+    if not icon:
+        return ""
+    icon_path = Path(icon).expanduser()
+    if icon_path.is_absolute() and icon_path.exists():
+        return str(icon_path)
+    base = re.sub(r"\.(png|svg|webp|jpg|jpeg)$", "", icon, flags=re.IGNORECASE)
+    names = [base + suffix for suffix in (".png", ".svg", ".webp", ".jpg", ".jpeg")]
+    preferred = ("512x512", "256x256", "128x128", "64x64", "48x48", "scalable")
+    matches: list[Path] = []
+    for root in ICON_LOOKUP_DIRS:
+        if not root.exists():
+            continue
+        if root.name == "pixmaps":
+            for name in names:
+                candidate = root / name
+                if candidate.exists():
+                    matches.append(candidate)
+            continue
+        for size in preferred:
+            for name in names:
+                candidate = root / "hicolor" / size / "apps" / name
+                if candidate.exists():
+                    matches.append(candidate)
+                candidate = root / size / "apps" / name
+                if candidate.exists():
+                    matches.append(candidate)
+        if not matches:
+            for name in names:
+                matches.extend(root.glob(f"*/**/apps/{name}"))
+    if not matches:
+        return ""
+    def score(path: Path) -> int:
+        text = str(path)
+        for index, size in enumerate(preferred):
+            if size in text:
+                return index
+        return len(preferred)
+    return str(sorted(matches, key=score)[0])
 
 
 def enrich_item(item: dict[str, Any], desktop_index: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -440,7 +493,7 @@ def enrich_item(item: dict[str, Any], desktop_index: dict[tuple[str, str], dict[
         enriched["packageName"] = item.get("name") or item.get("id")
         enriched["name"] = desktop.get("name") or enriched.get("name")
         enriched["description"] = desktop.get("description") or enriched.get("description", "")
-        enriched["icon"] = desktop.get("icon", "")
+        enriched["icon"] = find_theme_icon(str(desktop.get("icon", ""))) or desktop.get("icon", "")
         enriched["desktopId"] = desktop.get("desktopId")
         enriched["desktopPath"] = desktop.get("desktopPath")
         enriched["gui"] = True
@@ -595,6 +648,41 @@ def list_manual_installed() -> list[dict[str, Any]]:
         }
         for item in read_registry().get("manual", [])
     ]
+
+
+def list_desktop_installed() -> list[dict[str, Any]]:
+    desktop_index = desktop_package_index()
+    native_items = []
+    known_keys = {
+        (item.get("source"), item.get("package"))
+        for item in desktop_index.values()
+        if item.get("source") in {"apt", "pacman", "aur", "flatpak", "snap", "manual"}
+    }
+    seen: set[str] = set()
+    for item in desktop_index.values():
+        desktop_id = item.get("desktopId", "")
+        if not desktop_id or desktop_id in seen:
+            continue
+        seen.add(desktop_id)
+        if (item.get("source"), item.get("package")) in known_keys and item.get("source") != "desktop":
+            continue
+        if item.get("source") != "desktop":
+            continue
+        native_items.append(
+            {
+                "id": item.get("package"),
+                "name": item.get("name", item.get("package", "")),
+                "packageName": item.get("package"),
+                "version": "",
+                "source": "desktop",
+                "description": item.get("description", ""),
+                "icon": item.get("icon", ""),
+                "desktopId": desktop_id,
+                "desktopPath": item.get("desktopPath", ""),
+                "gui": True,
+            }
+        )
+    return native_items
 
 
 def parse_pacman_search(output: str, source: str) -> list[dict[str, Any]]:
@@ -850,7 +938,7 @@ def search_all_packages(query: str, include_non_gui: bool = True) -> list[dict[s
 
     if include_non_gui:
         for source in SOURCE_ORDER:
-            if source == "manual":
+            if source in {"manual", "desktop"}:
                 continue
             try:
                 items = search_packages(source, query)
@@ -1147,6 +1235,7 @@ def list_installed(source: str | None) -> list[dict[str, Any]]:
         "npm": list_npm_installed,
         "pip": list_pip_installed,
         "manual": list_manual_installed,
+        "desktop": list_desktop_installed,
     }
     if source and source != "all":
         if source not in mapping:

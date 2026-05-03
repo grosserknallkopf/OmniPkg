@@ -32,6 +32,7 @@ PIXMAP_ICON = Path.home() / ".local" / "share" / "pixmaps" / "omnipkg.png"
 DESKTOP_FILE = Path.home() / ".local" / "share" / "applications" / "omnipkg.desktop"
 LEGACY_DESKTOP_FILE = Path.home() / ".local" / "share" / "applications" / "arch-software-manager.desktop"
 BIN_FILE = Path.home() / ".local" / "bin" / "omnipkg"
+ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
 SOURCES = [
     ("apt", "APT"),
@@ -246,6 +247,10 @@ def run_in_thread(fn: Callable[[], Any], on_done: Callable[[Any, Exception | Non
     threading.Thread(target=worker, daemon=True).start()
 
 
+def DATA_HOME_ICON_DIR(size: int) -> Path:
+    return Path.home() / ".local" / "share" / "icons" / "hicolor" / f"{size}x{size}" / "apps"
+
+
 def install_launcher() -> None:
     MENU_ICON.parent.mkdir(parents=True, exist_ok=True)
     PIXMAP_ICON.parent.mkdir(parents=True, exist_ok=True)
@@ -253,12 +258,50 @@ def install_launcher() -> None:
     if ICON_SOURCE.exists():
         MENU_ICON.write_bytes(ICON_SOURCE.read_bytes())
         PIXMAP_ICON.write_bytes(ICON_SOURCE.read_bytes())
+        converter = core.which("magick") or core.which("convert")
+        for size in ICON_SIZES:
+            target = DATA_HOME_ICON_DIR(size) / "omnipkg.png"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if converter:
+                subprocess.run(
+                    [
+                        converter,
+                        str(ICON_SOURCE),
+                        "-resize",
+                        f"{size}x{size}",
+                        "-background",
+                        "none",
+                        "-gravity",
+                        "center",
+                        "-extent",
+                        f"{size}x{size}",
+                        str(target),
+                    ],
+                    check=False,
+                )
+            elif size == 512:
+                target.write_bytes(ICON_SOURCE.read_bytes())
+        if core.which("xdg-icon-resource"):
+            for size in ICON_SIZES:
+                target = DATA_HOME_ICON_DIR(size) / "omnipkg.png"
+                if target.exists():
+                    subprocess.run(
+                        ["xdg-icon-resource", "install", "--noupdate", "--novendor", "--mode", "user", "--size", str(size), str(target), "omnipkg"],
+                        check=False,
+                    )
+            subprocess.run(["xdg-icon-resource", "forceupdate", "--mode", "user"], check=False)
     if ASKPASS_SCRIPT.exists():
         ASKPASS_SCRIPT.chmod(0o755)
-    if not BIN_FILE.exists():
-        BIN_FILE.parent.mkdir(parents=True, exist_ok=True)
-        BIN_FILE.write_text(f'#!/usr/bin/env sh\nexec python3 "{ROOT / "omnipkg.py"}" "$@"\n', encoding="utf-8")
-        BIN_FILE.chmod(0o755)
+    BIN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    BIN_FILE.write_text(
+        "#!/usr/bin/env sh\n"
+        'LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omnipkg"\n'
+        'mkdir -p "$LOG_DIR"\n'
+        f'cd "{ROOT}" || exit 1\n'
+        f'exec python3 "{ROOT / "omnipkg.py"}" "$@" >> "$LOG_DIR/omnipkg.log" 2>&1\n',
+        encoding="utf-8",
+    )
+    BIN_FILE.chmod(0o755)
     if LEGACY_DESKTOP_FILE.exists():
         LEGACY_DESKTOP_FILE.unlink()
     desktop = (
@@ -267,13 +310,15 @@ def install_launcher() -> None:
         "Name=OmniPkg\n"
         "Comment=Install and manage apps from APT, Pacman, AUR, Flatpak, Snap, Homebrew, npm, pip and AppImages\n"
         f"Exec={BIN_FILE}\n"
-        f"Icon={MENU_ICON}\n"
+        "Icon=omnipkg\n"
         "Terminal=false\n"
         "Categories=Settings;PackageManager;\n"
         "StartupNotify=false\n"
     )
     DESKTOP_FILE.write_text(desktop, encoding="utf-8")
     DESKTOP_FILE.chmod(0o755)
+    if core.which("xdg-desktop-menu"):
+        subprocess.run(["xdg-desktop-menu", "forceupdate"], check=False)
     subprocess.run(["update-desktop-database", str(DESKTOP_FILE.parent)], check=False)
     icon_theme_root = MENU_ICON.parents[2]
     if (icon_theme_root / "index.theme").exists():
@@ -345,6 +390,9 @@ class PackageRow(Gtk.ListBoxRow):
         text_box.append(meta)
 
         button = Gtk.Button(label=action_label)
+        if item.get("source") == "desktop" and action_label == "Remove":
+            button.set_label("Launcher")
+            button.set_sensitive(False)
         button.add_css_class(action_class)
         button.connect("clicked", lambda _button: callback(item))
         box.append(button)

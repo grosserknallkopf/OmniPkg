@@ -77,7 +77,10 @@ install_files() {
 
   cat > "$BIN_FILE" <<EOF
 #!/usr/bin/env sh
-exec python3 "$APP_DIR/omnipkg.py" "\$@"
+LOG_DIR="\${XDG_CACHE_HOME:-\$HOME/.cache}/omnipkg"
+mkdir -p "\$LOG_DIR"
+cd "$APP_DIR" || exit 1
+exec python3 "$APP_DIR/omnipkg.py" "\$@" >> "\$LOG_DIR/omnipkg.log" 2>&1
 EOF
   chmod 0755 "$BIN_FILE"
 }

@@ -55,8 +55,20 @@ install_dependencies() {
   if command -v apt-get >/dev/null 2>&1; then
     as_root apt-get update
     as_root apt-get install -y python3-gi gir1.2-gtk-4.0 desktop-file-utils appstream
+  elif command -v dnf5 >/dev/null 2>&1; then
+    as_root dnf5 install -y python3-gobject gtk4 desktop-file-utils appstream
+  elif command -v dnf >/dev/null 2>&1; then
+    as_root dnf install -y python3-gobject gtk4 desktop-file-utils appstream
+  elif command -v zypper >/dev/null 2>&1; then
+    as_root zypper --non-interactive install python3-gobject gtk4 desktop-file-utils AppStream
   elif command -v pacman >/dev/null 2>&1; then
     as_root pacman -Sy --needed --noconfirm python-gobject gtk4 desktop-file-utils appstream
+  elif command -v apk >/dev/null 2>&1; then
+    as_root apk add python3 py3-gobject3 gtk4.0 desktop-file-utils appstream
+  elif command -v xbps-install >/dev/null 2>&1; then
+    as_root xbps-install -Sy python3-gobject gtk4 desktop-file-utils AppStream
+  elif command -v eopkg >/dev/null 2>&1; then
+    as_root eopkg -y install python3-gobject gtk-4 desktop-file-utils appstream-glib
   else
     printf 'No supported system package manager was found for automatic dependency installation.\n' >&2
     printf 'Please install Python 3, PyGObject, GTK4, desktop-file-utils and appstream.\n' >&2
@@ -105,7 +117,7 @@ configure_sudoers() {
 
   local target_user="${SUDO_USER:-$USER}"
   local commands=()
-  for binary in apt-get pacman snap flatpak; do
+  for binary in apt-get dnf5 dnf zypper pacman apk xbps-install xbps-remove eopkg snap flatpak; do
     if command -v "$binary" >/dev/null 2>&1; then
       commands+=("$(command -v "$binary")")
     fi

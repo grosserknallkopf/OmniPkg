@@ -22,28 +22,190 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 import omnipkg_core as core  # noqa: E402
 
 
-APP_ID = "dev.omnipkg.OmniPkg"
+APP_ID = "dev.omnipkg.omnipkg"
 APP_TITLE = "OmniPkg"
 ROOT = Path(__file__).resolve().parent
 ICON_SOURCE = ROOT / "assets" / "omnipkg-logo.png"
 ASKPASS_SCRIPT = ROOT / "assets" / "omnipkg-askpass.py"
 MENU_ICON = Path.home() / ".local" / "share" / "icons" / "hicolor" / "512x512" / "apps" / "omnipkg.png"
 PIXMAP_ICON = Path.home() / ".local" / "share" / "pixmaps" / "omnipkg.png"
-DESKTOP_FILE = Path.home() / ".local" / "share" / "applications" / "omnipkg.desktop"
-LEGACY_DESKTOP_FILE = Path.home() / ".local" / "share" / "applications" / "arch-software-manager.desktop"
+DESKTOP_FILE = Path.home() / ".local" / "share" / "applications" / f"{APP_ID}.desktop"
+LEGACY_DESKTOP_FILES = (
+    Path.home() / ".local" / "share" / "applications" / "omnipkg.desktop",
+    Path.home() / ".local" / "share" / "applications" / "arch-software-manager.desktop",
+)
 BIN_FILE = Path.home() / ".local" / "bin" / "omnipkg"
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
 SOURCES = [
     ("apt", "APT"),
+    ("dnf", "DNF"),
+    ("zypper", "Zypper"),
     ("pacman", "Pacman"),
     ("aur", "AUR"),
+    ("apk", "APK"),
+    ("xbps", "XBPS"),
+    ("eopkg", "eopkg"),
     ("flatpak", "Flatpak"),
     ("snap", "Snap"),
     ("brew", "Homebrew"),
     ("npm", "npm"),
     ("pip", "pip"),
 ]
+
+TRANSLATIONS = {
+    "en": {
+        "activity_title": "Task log",
+        "admin_already_root": "The app is already running with root privileges.",
+        "admin_authorized": "Admin authorization prepared.",
+        "admin_not_confirmed": "Admin authorization was not confirmed. System packages will ask again later.",
+        "admin_prepare": "Preparing admin authorization...",
+        "admin_sudo_authorized": "Sudo authorization prepared.",
+        "admin_sudo_not_confirmed": "Sudo authorization was not confirmed. System packages will ask again later.",
+        "appimage_file": "AppImage file",
+        "appimage_failed": "AppImage failed: {error}",
+        "appimage_installed": "{name} installed",
+        "apps_only": "Apps only",
+        "archive": "Archive",
+        "archive_failed": "Archive failed: {error}",
+        "archive_file": "Archive file",
+        "archive_installed": "{name} installed",
+        "cancel": "Cancel",
+        "choose": "Choose",
+        "choose_file": "Choose a file",
+        "desktop_launcher_logo": "Desktop launcher logo",
+        "discover": "Discover",
+        "empty_discover": "Search for software. OmniPkg will look across every available source.",
+        "entries_count": "{count} of {total} entries",
+        "executable_inside_archive": "Executable inside archive",
+        "install": "Install",
+        "install_appimage": "Install AppImage",
+        "install_archive": "Install archive",
+        "installed": "Installed",
+        "installed_load_failed": "Installed packages could not be loaded.",
+        "installed_load_failed_log": "Installed packages could not be loaded: {error}",
+        "job_not_found": "Job not found.",
+        "job_started": "Job started: {job_id}",
+        "language": "Language",
+        "loading_installed": "Loading installed packages...",
+        "manual": "Manual",
+        "manual_install": "Manual install",
+        "min_chars": "Please enter at least two characters.",
+        "missing": "missing",
+        "mode_all": "all packages",
+        "mode_gui": "graphical apps",
+        "no_installed": "No installed entries found.",
+        "no_results": "No results in the available sources.",
+        "pkexec_missing": "pkexec is missing. Install polkit/pkexec for graphical admin prompts.",
+        "ready": "ready",
+        "refresh": "Refresh",
+        "remove": "Remove",
+        "removed": "{name} removed",
+        "removal_failed": "Removal failed: {error}",
+        "search": "Search",
+        "search_failed": "Search failed: {error}",
+        "search_finished": "Search finished: {count} results",
+        "search_placeholder": "Search apps, packages, AppImages, CLI tools or libraries",
+        "search_results": "Search results for \"{query}\"",
+        "search_started": "Search started: {query} ({mode})",
+        "searching": "OmniPkg is searching {mode} across all available sources...",
+        "source_status_failed": "Source status failed: {error}",
+        "tagline": "One roof for all your package sources",
+        "title": "OmniPkg",
+        "unknown_admin": "Neither pkexec nor sudo was found. System-wide installs cannot start.",
+    },
+    "de": {
+        "activity_title": "Aufgabenprotokoll",
+        "admin_already_root": "Die App läuft bereits mit Root-Rechten.",
+        "admin_authorized": "Admin-Freigabe ist vorbereitet.",
+        "admin_not_confirmed": "Admin-Freigabe wurde nicht bestätigt. Systempakete fragen später erneut nach.",
+        "admin_prepare": "Admin-Freigabe wird vorbereitet...",
+        "admin_sudo_authorized": "Sudo-Freigabe ist vorbereitet.",
+        "admin_sudo_not_confirmed": "Sudo-Freigabe wurde nicht bestätigt. Systempakete fragen später erneut nach.",
+        "appimage_file": "AppImage-Datei",
+        "appimage_failed": "AppImage fehlgeschlagen: {error}",
+        "appimage_installed": "{name} installiert",
+        "apps_only": "Nur Apps",
+        "archive": "Archiv",
+        "archive_failed": "Archiv fehlgeschlagen: {error}",
+        "archive_file": "Archivdatei",
+        "archive_installed": "{name} installiert",
+        "cancel": "Abbrechen",
+        "choose": "Auswählen",
+        "choose_file": "Datei auswählen",
+        "desktop_launcher_logo": "Logo für Anwendungsmenü",
+        "discover": "Entdecken",
+        "empty_discover": "Suche nach Software. OmniPkg durchsucht jede verfügbare Quelle.",
+        "entries_count": "{count} von {total} Einträgen",
+        "executable_inside_archive": "Programmdatei im Archiv",
+        "install": "Installieren",
+        "install_appimage": "AppImage installieren",
+        "install_archive": "Archiv installieren",
+        "installed": "Installiert",
+        "installed_load_failed": "Installierte Pakete konnten nicht geladen werden.",
+        "installed_load_failed_log": "Installierte Pakete konnten nicht geladen werden: {error}",
+        "job_not_found": "Aufgabe nicht gefunden.",
+        "job_started": "Aufgabe gestartet: {job_id}",
+        "language": "Sprache",
+        "loading_installed": "Installierte Pakete werden geladen...",
+        "manual": "Manuell",
+        "manual_install": "Manuell installieren",
+        "min_chars": "Bitte mindestens zwei Zeichen eingeben.",
+        "missing": "fehlt",
+        "mode_all": "allen Paketen",
+        "mode_gui": "grafischen Apps",
+        "no_installed": "Keine installierten Einträge gefunden.",
+        "no_results": "Keine Treffer in den verfügbaren Quellen.",
+        "pkexec_missing": "pkexec fehlt. Installiere polkit/pkexec für grafische Admin-Abfragen.",
+        "ready": "bereit",
+        "refresh": "Aktualisieren",
+        "remove": "Deinstallieren",
+        "removed": "{name} entfernt",
+        "removal_failed": "Entfernen fehlgeschlagen: {error}",
+        "search": "Suchen",
+        "search_failed": "Suche fehlgeschlagen: {error}",
+        "search_finished": "Suche abgeschlossen: {count} Treffer",
+        "search_placeholder": "Apps, Pakete, AppImages, CLI-Tools oder Bibliotheken suchen",
+        "search_results": "Suchergebnisse für \"{query}\"",
+        "search_started": "Suche gestartet: {query} ({mode})",
+        "searching": "OmniPkg sucht nach {mode} in allen verfügbaren Quellen...",
+        "source_status_failed": "Quellenstatus fehlgeschlagen: {error}",
+        "tagline": "Ein Dach für alle Paketquellen",
+        "title": "OmniPkg",
+        "unknown_admin": "Weder pkexec noch sudo wurde gefunden. Systemweite Installationen können nicht starten.",
+    },
+}
+
+
+def detect_language() -> str:
+    override = os.environ.get("OMNIPKG_LANG", "").strip().lower()
+    if override.startswith(("de", "en")):
+        return override[:2]
+    candidates = (
+        os.environ.get("LANGUAGE", ""),
+        os.environ.get("LANG", ""),
+        os.environ.get("LC_MESSAGES", ""),
+        os.environ.get("LC_ALL", ""),
+    )
+    for value in candidates:
+        primary = value.split(":", 1)[0].split(".", 1)[0].replace("_", "-").lower()
+        if primary.startswith("de"):
+            return "de"
+    return "en"
+
+
+LANGUAGE = detect_language()
+
+
+def set_language(language: str) -> None:
+    global LANGUAGE
+    LANGUAGE = "de" if language == "de" else "en"
+    os.environ["OMNIPKG_LANG"] = LANGUAGE
+
+
+def tr(key: str, **values: Any) -> str:
+    text = TRANSLATIONS.get(LANGUAGE, TRANSLATIONS["en"]).get(key, TRANSLATIONS["en"].get(key, key))
+    return text.format(**values) if values else text
 
 CSS = """
 window {
@@ -302,17 +464,19 @@ def install_launcher() -> None:
         encoding="utf-8",
     )
     BIN_FILE.chmod(0o755)
-    if LEGACY_DESKTOP_FILE.exists():
-        LEGACY_DESKTOP_FILE.unlink()
+    for legacy_file in LEGACY_DESKTOP_FILES:
+        if legacy_file.exists():
+            legacy_file.unlink()
     desktop = (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=OmniPkg\n"
-        "Comment=Install and manage apps from APT, Pacman, AUR, Flatpak, Snap, Homebrew, npm, pip and AppImages\n"
+        "Comment=Install and manage apps from APT, DNF, Zypper, Pacman, AUR, APK, XBPS, eopkg, Flatpak, Snap, Homebrew, npm, pip and AppImages\n"
         f"Exec={BIN_FILE}\n"
         "Icon=omnipkg\n"
         "Terminal=false\n"
         "Categories=Settings;PackageManager;\n"
+        f"StartupWMClass={APP_ID}\n"
         "StartupNotify=false\n"
     )
     DESKTOP_FILE.write_text(desktop, encoding="utf-8")
@@ -390,9 +554,6 @@ class PackageRow(Gtk.ListBoxRow):
         text_box.append(meta)
 
         button = Gtk.Button(label=action_label)
-        if item.get("source") == "desktop" and action_label == "Remove":
-            button.set_label("Launcher")
-            button.set_sensitive(False)
         button.add_css_class(action_class)
         button.connect("clicked", lambda _button: callback(item))
         box.append(button)
@@ -422,11 +583,11 @@ class PathField(Gtk.Box):
 
     def choose_file(self, _button: Gtk.Button) -> None:
         dialog = Gtk.FileChooserNative(
-            title="Choose a file",
+            title=tr("choose_file"),
             transient_for=self.window,
             action=Gtk.FileChooserAction.OPEN,
-            accept_label="Choose",
-            cancel_label="Cancel",
+            accept_label=tr("choose"),
+            cancel_label=tr("cancel"),
         )
 
         def response(native: Gtk.FileChooserNative, result: int) -> None:
@@ -472,11 +633,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self.installed: list[dict[str, Any]] = []
         self.log_lines: list[str] = []
         self.search_token = 0
+        self.suspend_events = False
 
         self.build_ui()
         self.refresh_status()
-        self.show_empty(self.results_list, "Search for software. OmniPkg will look across every available source.")
-        self.show_empty(self.installed_list, "Loading installed packages...")
+        self.show_empty(self.results_list, tr("empty_discover"))
+        self.show_empty(self.installed_list, tr("loading_installed"))
         self.load_installed()
         if not skip_admin:
             self.prepare_admin()
@@ -502,24 +664,24 @@ class MainWindow(Gtk.ApplicationWindow):
 
         brand = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         header.append(brand)
-        title = Gtk.Label(label="OmniPkg")
+        title = Gtk.Label(label=tr("title"))
         title.set_xalign(0)
         title.add_css_class("brand-title")
         brand.append(title)
-        subtitle = Gtk.Label(label="One roof for all your package sources")
+        subtitle = Gtk.Label(label=tr("tagline"))
         subtitle.set_xalign(0)
         subtitle.add_css_class("brand-subtitle")
         brand.append(subtitle)
 
         self.search_entry = Gtk.SearchEntry()
-        self.search_entry.set_placeholder_text("Search apps, packages, AppImages, CLI tools or libraries")
+        self.search_entry.set_placeholder_text(tr("search_placeholder"))
         self.search_entry.add_css_class("search-entry")
         self.search_entry.set_hexpand(True)
         self.search_entry.connect("activate", lambda _entry: self.search_all_sources())
         self.search_entry.connect("search-changed", self.on_search_changed)
         header.append(self.search_entry)
 
-        search_button = Gtk.Button(label="Search")
+        search_button = Gtk.Button(label=tr("search"))
         search_button.add_css_class("primary")
         search_button.connect("clicked", lambda _button: self.search_all_sources())
         header.append(search_button)
@@ -527,17 +689,28 @@ class MainWindow(Gtk.ApplicationWindow):
         gui_filter = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         gui_filter.set_valign(Gtk.Align.CENTER)
         header.append(gui_filter)
-        gui_filter.append(Gtk.Label(label="Apps only"))
+        gui_filter.append(Gtk.Label(label=tr("apps_only")))
         self.only_gui_switch = Gtk.Switch()
         self.only_gui_switch.set_active(True)
         self.only_gui_switch.connect("notify::active", self.on_gui_filter_changed)
         gui_filter.append(self.only_gui_switch)
 
+        language_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        language_box.set_valign(Gtk.Align.CENTER)
+        header.append(language_box)
+        language_box.append(Gtk.Label(label=tr("language")))
+        self.language_combo = Gtk.ComboBoxText()
+        self.language_combo.append("de", "Deutsch")
+        self.language_combo.append("en", "English")
+        self.language_combo.set_active_id(LANGUAGE)
+        self.language_combo.connect("changed", self.on_language_changed)
+        language_box.append(self.language_combo)
+
         tabs = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         tabs.add_css_class("tabs")
         main.append(tabs)
         self.tab_buttons: dict[str, Gtk.Button] = {}
-        for view, label in (("discover", "Discover"), ("installed", "Installed"), ("manual", "Manual")):
+        for view, label in (("discover", tr("discover")), ("installed", tr("installed")), ("manual", tr("manual"))):
             button = Gtk.Button(label=label)
             button.add_css_class("tab-button")
             button.connect("clicked", lambda _button, selected=view: self.set_view(selected))
@@ -552,14 +725,14 @@ class MainWindow(Gtk.ApplicationWindow):
         self.stack.set_vexpand(True)
         main.append(self.stack)
 
-        self.results_title = Gtk.Label(label="Discover")
+        self.results_title = Gtk.Label(label=tr("discover"))
         self.results_title.add_css_class("section-title")
         self.results_title.set_xalign(0)
         self.results_list = Gtk.ListBox()
         self.results_list.set_selection_mode(Gtk.SelectionMode.NONE)
         self.stack.add_named(self.make_list_page(self.results_title, self.results_list), "discover")
 
-        self.installed_title = Gtk.Label(label="Installed")
+        self.installed_title = Gtk.Label(label=tr("installed"))
         self.installed_title.add_css_class("section-title")
         self.installed_title.set_xalign(0)
         self.installed_list = Gtk.ListBox()
@@ -572,7 +745,7 @@ class MainWindow(Gtk.ApplicationWindow):
         activity = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         activity.add_css_class("activity")
         root.append(activity)
-        activity.append(Gtk.Label(label="Activity", css_classes=["activity-title"]))
+        activity.append(Gtk.Label(label=tr("activity_title"), css_classes=["activity-title"]))
         self.log_label = Gtk.Label(label="")
         self.log_label.set_xalign(0)
         self.log_label.set_yalign(0)
@@ -582,6 +755,31 @@ class MainWindow(Gtk.ApplicationWindow):
         scroll.set_vexpand(True)
         scroll.set_child(self.log_label)
         activity.append(scroll)
+
+    def on_language_changed(self, combo: Gtk.ComboBoxText) -> None:
+        language = combo.get_active_id()
+        if not language or language == LANGUAGE:
+            return
+        query = self.search_entry.get_text()
+        only_gui = self.only_gui_switch.get_active()
+        view = self.current_view
+        set_language(language)
+        self.suspend_events = True
+        self.set_child(None)
+        self.build_ui()
+        self.search_entry.set_text(query)
+        self.only_gui_switch.set_active(only_gui)
+        self.log_label.set_text("\n".join(self.log_lines))
+        self.render_source_chips()
+        if self.results:
+            if query.strip():
+                self.results_title.set_text(tr("search_results", query=query.strip()))
+            self.render_results()
+        else:
+            self.show_empty(self.results_list, tr("empty_discover"))
+        self.render_installed()
+        self.set_view(view)
+        self.suspend_events = False
 
     def make_list_page(self, title: Gtk.Label, list_box: Gtk.ListBox) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -600,7 +798,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.installed_meta = Gtk.Label(label="")
         self.installed_meta.add_css_class("muted")
         top.append(self.installed_meta)
-        refresh = Gtk.Button(label="Refresh")
+        refresh = Gtk.Button(label=tr("refresh"))
         refresh.add_css_class("secondary")
         refresh.connect("clicked", lambda _button: self.load_installed())
         top.append(refresh)
@@ -613,7 +811,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def make_manual_page(self) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        title = Gtk.Label(label="Manual installieren")
+        title = Gtk.Label(label=tr("manual_install"))
         title.set_xalign(0)
         title.add_css_class("section-title")
         page.append(title)
@@ -627,12 +825,12 @@ class MainWindow(Gtk.ApplicationWindow):
         grid.attach(appimage, 0, 0, 1, 1)
         appimage.append(Gtk.Label(label="AppImage", xalign=0, css_classes=["package-name"]))
         self.appimage_name = TextField("Name", "Obsidian")
-        self.appimage_path = PathField("AppImage file", "/home/user/Downloads/App.AppImage", self)
-        self.appimage_icon = PathField("Desktop launcher logo", "/home/user/Pictures/logo.png", self)
+        self.appimage_path = PathField(tr("appimage_file"), "/home/user/Downloads/App.AppImage", self)
+        self.appimage_icon = PathField(tr("desktop_launcher_logo"), "/home/user/Pictures/logo.png", self)
         appimage.append(self.appimage_name)
         appimage.append(self.appimage_path)
         appimage.append(self.appimage_icon)
-        appimage_button = Gtk.Button(label="Install AppImage")
+        appimage_button = Gtk.Button(label=tr("install_appimage"))
         appimage_button.add_css_class("primary")
         appimage_button.connect("clicked", lambda _button: self.install_appimage())
         appimage.append(appimage_button)
@@ -640,16 +838,16 @@ class MainWindow(Gtk.ApplicationWindow):
         archive = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         archive.add_css_class("tool-panel")
         grid.attach(archive, 1, 0, 1, 1)
-        archive.append(Gtk.Label(label="Archive", xalign=0, css_classes=["package-name"]))
+        archive.append(Gtk.Label(label=tr("archive"), xalign=0, css_classes=["package-name"]))
         self.archive_name = TextField("Name", "Toolbox")
-        self.archive_path = PathField("Archive file", "/home/user/Downloads/tool.tar.gz", self)
-        self.archive_executable = TextField("Executable inside archive", "bin/tool")
-        self.archive_icon = PathField("Desktop launcher logo", "/home/user/Pictures/icon.svg", self)
+        self.archive_path = PathField(tr("archive_file"), "/home/user/Downloads/tool.tar.gz", self)
+        self.archive_executable = TextField(tr("executable_inside_archive"), "bin/tool")
+        self.archive_icon = PathField(tr("desktop_launcher_logo"), "/home/user/Pictures/icon.svg", self)
         archive.append(self.archive_name)
         archive.append(self.archive_path)
         archive.append(self.archive_executable)
         archive.append(self.archive_icon)
-        archive_button = Gtk.Button(label="Install archive")
+        archive_button = Gtk.Button(label=tr("install_archive"))
         archive_button.add_css_class("primary")
         archive_button.connect("clicked", lambda _button: self.install_archive())
         archive.append(archive_button)
@@ -667,10 +865,14 @@ class MainWindow(Gtk.ApplicationWindow):
             self.render_installed()
 
     def on_search_changed(self, _entry: Gtk.SearchEntry) -> None:
+        if self.suspend_events:
+            return
         if self.current_view == "installed":
             self.render_installed()
 
     def on_gui_filter_changed(self, _switch: Gtk.Switch, _param: Any) -> None:
+        if self.suspend_events:
+            return
         self.render_installed()
         if self.current_view == "discover" and len(self.search_entry.get_text().strip()) >= 2:
             self.search_all_sources()
@@ -678,7 +880,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def refresh_status(self) -> None:
         def done(data: Any, error: Exception | None) -> bool:
             if error:
-                self.log(f"Source status failed: {error}")
+                self.log(tr("source_status_failed", error=error))
                 return False
             self.status_data = data
             self.render_source_chips()
@@ -692,7 +894,7 @@ class MainWindow(Gtk.ApplicationWindow):
         sources = self.status_data.get("sources", {}) if self.status_data else {}
         for source_id, label in SOURCES:
             meta = sources.get(source_id, {})
-            chip = Gtk.Label(label=f"{label}: {'ready' if meta.get('available') else 'missing'}")
+            chip = Gtk.Label(label=f"{label}: {tr('ready') if meta.get('available') else tr('missing')}")
             chip.add_css_class("chip")
             if not meta.get("available"):
                 chip.add_css_class("off")
@@ -721,44 +923,44 @@ class MainWindow(Gtk.ApplicationWindow):
         query = self.search_entry.get_text().strip()
         self.set_view("discover")
         if len(query) < 2:
-            self.show_empty(self.results_list, "Please enter at least two characters.")
+            self.show_empty(self.results_list, tr("min_chars"))
             return
         self.search_token += 1
         token = self.search_token
         self.results = []
         include_non_gui = not self.only_gui_switch.get_active()
-        mode = "all packages" if include_non_gui else "graphical apps"
-        self.show_empty(self.results_list, f"OmniPkg is searching {mode} across all available sources...")
-        self.results_title.set_text(f"Search results for \"{query}\"")
-        self.log(f"Search started: {query} ({mode})")
+        mode = tr("mode_all") if include_non_gui else tr("mode_gui")
+        self.show_empty(self.results_list, tr("searching", mode=mode))
+        self.results_title.set_text(tr("search_results", query=query))
+        self.log(tr("search_started", query=query, mode=mode))
 
         def done(items: Any, error: Exception | None) -> bool:
             if token != self.search_token:
                 return False
             if error:
-                self.show_empty(self.results_list, f"Search failed: {error}")
-                self.log(f"Search failed: {error}")
+                self.show_empty(self.results_list, tr("search_failed", error=error))
+                self.log(tr("search_failed", error=error))
                 return False
             self.results = items
             if not self.results:
-                self.show_empty(self.results_list, "No results in the available sources.")
+                self.show_empty(self.results_list, tr("no_results"))
             else:
                 self.render_results()
-            self.log(f"Search finished: {len(self.results)} results")
+            self.log(tr("search_finished", count=len(self.results)))
             return False
 
         run_in_thread(lambda: core.search_all_packages(query, include_non_gui=include_non_gui), done)
 
     def render_results(self) -> None:
         self.clear_list(self.results_list)
-        for item in sorted(self.results, key=lambda value: (value.get("source", ""), value.get("name", ""))):
-            self.results_list.append(PackageRow(item, "Install", "primary", self.install_package))
+        for item in self.results:
+            self.results_list.append(PackageRow(item, tr("install"), "primary", self.install_package))
 
     def load_installed(self) -> None:
         def done(items: Any, error: Exception | None) -> bool:
             if error:
-                self.log(f"Installed packages could not be loaded: {error}")
-                self.show_empty(self.installed_list, "Installed packages could not be loaded.")
+                self.log(tr("installed_load_failed_log", error=error))
+                self.show_empty(self.installed_list, tr("installed_load_failed"))
                 return False
             self.installed = items
             self.render_installed()
@@ -768,7 +970,8 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def render_installed(self) -> None:
         query = self.search_entry.get_text().strip().lower() if self.current_view == "installed" else ""
-        items = self.installed
+        visible_installed = [item for item in self.installed if item.get("source") != "desktop"]
+        items = visible_installed
         if self.only_gui_switch.get_active():
             items = [item for item in items if item.get("gui")]
         if query:
@@ -780,13 +983,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 or query in str(item.get("path", "")).lower()
                 or query in str(item.get("packageName", "")).lower()
             ]
-        self.installed_meta.set_text(f"{len(items)} of {len(self.installed)} entries")
+        self.installed_meta.set_text(tr("entries_count", count=len(items), total=len(visible_installed)))
         if not items:
-            self.show_empty(self.installed_list, "No installed entries found.")
+            self.show_empty(self.installed_list, tr("no_installed"))
             return
         self.clear_list(self.installed_list)
         for item in sorted(items, key=lambda value: (value.get("source", ""), value.get("name", "").lower())):
-            self.installed_list.append(PackageRow(item, "Remove", "danger", self.uninstall_package))
+            self.installed_list.append(PackageRow(item, tr("remove"), "danger", self.uninstall_package))
 
     def install_package(self, item: dict[str, Any]) -> None:
         source = item.get("source", "")
@@ -804,9 +1007,9 @@ class MainWindow(Gtk.ApplicationWindow):
         if source == "manual":
             def done(_entry: Any, error: Exception | None) -> bool:
                 if error:
-                    self.log(f"Removal failed: {error}")
+                    self.log(tr("removal_failed", error=error))
                 else:
-                    self.log(f"{name} removed")
+                    self.log(tr("removed", name=name))
                     self.load_installed()
                 return False
 
@@ -820,14 +1023,14 @@ class MainWindow(Gtk.ApplicationWindow):
             self.log(str(exc))
 
     def watch_job(self, job_id: str) -> None:
-        self.log(f"Job started: {job_id}")
+        self.log(tr("job_started", job_id=job_id))
         last_len = 0
 
         def poll() -> bool:
             nonlocal last_len
             job = core.JOBS.get(job_id)
             if not job:
-                self.log("Job not found.")
+                self.log(tr("job_not_found"))
                 return False
             for line in job.output[last_len:]:
                 self.log(line)
@@ -849,9 +1052,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
         def done(entry: Any, error: Exception | None) -> bool:
             if error:
-                self.log(f"AppImage failed: {error}")
+                self.log(tr("appimage_failed", error=error))
             else:
-                self.log(f"{entry.get('name')} installed")
+                self.log(tr("appimage_installed", name=entry.get("name")))
                 self.load_installed()
             return False
 
@@ -867,9 +1070,9 @@ class MainWindow(Gtk.ApplicationWindow):
 
         def done(entry: Any, error: Exception | None) -> bool:
             if error:
-                self.log(f"Archive failed: {error}")
+                self.log(tr("archive_failed", error=error))
             else:
-                self.log(f"{entry.get('name')} installed")
+                self.log(tr("archive_installed", name=entry.get("name")))
                 self.load_installed()
             return False
 
@@ -878,7 +1081,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def prepare_admin(self) -> None:
         def admin() -> str:
             if os.geteuid() == 0:
-                return "The app is already running with root privileges."
+                return tr("admin_already_root")
             if os.environ.get("SUDO_ASKPASS") and core.which("sudo"):
                 proc = subprocess.run(
                     ["sudo", "-A", "-v"],
@@ -889,8 +1092,8 @@ class MainWindow(Gtk.ApplicationWindow):
                     timeout=180,
                 )
                 if proc.returncode == 0:
-                    return "Sudo authorization prepared."
-                return "Sudo authorization was not confirmed. System packages will ask again later."
+                    return tr("admin_sudo_authorized")
+                return tr("admin_sudo_not_confirmed")
             if core.which("pkexec"):
                 proc = subprocess.run(
                     ["pkexec", "true"],
@@ -901,17 +1104,17 @@ class MainWindow(Gtk.ApplicationWindow):
                     timeout=180,
                 )
                 if proc.returncode == 0:
-                    return "Admin authorization prepared."
-                return "Admin authorization was not confirmed. System packages will ask again later."
+                    return tr("admin_authorized")
+                return tr("admin_not_confirmed")
             if core.which("sudo"):
-                return "pkexec is missing. Install polkit/pkexec for graphical admin prompts."
-            return "Neither pkexec nor sudo was found. System-wide installs cannot start."
+                return tr("pkexec_missing")
+            return tr("unknown_admin")
 
         def done(message: Any, error: Exception | None) -> bool:
             self.log(str(error or message))
             return False
 
-        self.log("Preparing admin authorization...")
+        self.log(tr("admin_prepare"))
         run_in_thread(admin, done)
 
 
@@ -941,8 +1144,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=APP_TITLE)
     parser.add_argument("--install-launcher", action="store_true", help="Install the desktop launcher")
     parser.add_argument("--check", action="store_true", help="Check dependencies")
+    parser.add_argument("--lang", choices=("de", "en"), help="Override UI language")
     parser.add_argument("--skip-admin", action="store_true", help="Skip admin warmup")
     args = parser.parse_args()
+    if args.lang:
+        set_language(args.lang)
 
     if args.install_launcher:
         install_launcher()

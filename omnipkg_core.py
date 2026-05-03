@@ -45,7 +45,23 @@ BIN_DIR = Path.home() / ".local" / "bin"
 APPLICATIONS_DIR = DATA_HOME / "applications"
 ICON_DIR = DATA_HOME / "icons" / "hicolor" / "512x512" / "apps"
 PACKAGE_RE = re.compile(r"^[A-Za-z0-9@._+:/=-]+$")
-SOURCE_ORDER = ("apt", "pacman", "aur", "flatpak", "snap", "brew", "npm", "pip", "manual", "desktop")
+SOURCE_ORDER = (
+    "apt",
+    "dnf",
+    "zypper",
+    "pacman",
+    "aur",
+    "apk",
+    "xbps",
+    "eopkg",
+    "flatpak",
+    "snap",
+    "brew",
+    "npm",
+    "pip",
+    "manual",
+    "desktop",
+)
 DESKTOP_DIRS = (
     Path("/usr/share/applications"),
     Path("/usr/local/share/applications"),
@@ -55,6 +71,8 @@ DESKTOP_DIRS = (
     Path("/var/lib/snapd/desktop/applications"),
 )
 APPSTREAM_ICON_DIRS = (
+    Path("/var/lib/flatpak/appstream"),
+    DATA_HOME / "flatpak" / "appstream",
     Path("/var/lib/swcatalog/icons"),
     Path("/usr/share/swcatalog/icons"),
     Path("/var/cache/app-info/icons"),
@@ -125,6 +143,28 @@ def require_binary(binary: str) -> str:
     return found
 
 
+def detected_language() -> str:
+    override = os.environ.get("OMNIPKG_LANG", "").strip().lower()
+    if override.startswith(("de", "en")):
+        return override[:2]
+    for value in (
+        os.environ.get("LANGUAGE", ""),
+        os.environ.get("LANG", ""),
+        os.environ.get("LC_MESSAGES", ""),
+        os.environ.get("LC_ALL", ""),
+    ):
+        primary = value.split(":", 1)[0].split(".", 1)[0].replace("_", "-").lower()
+        if primary.startswith("de"):
+            return "de"
+    return "en"
+
+
+def desktop_entry_value(entry: configparser.SectionProxy, key: str) -> str:
+    if detected_language() == "de":
+        return entry.get(f"{key}[de_DE]") or entry.get(f"{key}[de]") or entry.get(key, "")
+    return entry.get(key, "")
+
+
 def aur_helper() -> str | None:
     for helper in ("yay", "paru"):
         if which(helper):
@@ -163,6 +203,44 @@ def apt_available() -> bool:
 def require_apt() -> None:
     if not apt_available():
         raise ApiError("APT is not installed or not fully available in PATH.", 404)
+
+
+def dnf_binary() -> str | None:
+    return which("dnf5") or which("dnf")
+
+
+def zypper_available() -> bool:
+    return bool(which("zypper"))
+
+
+def apk_available() -> bool:
+    return bool(which("apk"))
+
+
+def xbps_available() -> bool:
+    return bool(which("xbps-query") and which("xbps-install") and which("xbps-remove"))
+
+
+def eopkg_available() -> bool:
+    return bool(which("eopkg"))
+
+
+def native_package_source() -> str:
+    if apt_available():
+        return "apt"
+    if dnf_binary():
+        return "dnf"
+    if zypper_available():
+        return "zypper"
+    if which("pacman"):
+        return "pacman"
+    if apk_available():
+        return "apk"
+    if xbps_available():
+        return "xbps"
+    if eopkg_available():
+        return "eopkg"
+    return ""
 
 
 def validate_package_name(name: str) -> str:
@@ -316,7 +394,7 @@ def parse_desktop_file(path: Path) -> dict[str, Any] | None:
         return None
     if entry.getboolean("Hidden", fallback=False):
         return None
-    name = entry.get("Name[de]") or entry.get("Name[de_DE]") or entry.get("Name")
+    name = desktop_entry_value(entry, "Name")
     if not name:
         return None
     desktop_id = path.name
@@ -331,8 +409,8 @@ def parse_desktop_file(path: Path) -> dict[str, Any] | None:
         "desktopId": desktop_id,
         "desktopPath": str(path),
         "name": name,
-        "genericName": entry.get("GenericName[de]") or entry.get("GenericName"),
-        "description": entry.get("Comment[de]") or entry.get("Comment") or "",
+        "genericName": desktop_entry_value(entry, "GenericName"),
+        "description": desktop_entry_value(entry, "Comment"),
         "icon": entry.get("Icon", ""),
         "exec": entry.get("Exec", ""),
         "categories": entry.get("Categories", ""),
@@ -374,6 +452,14 @@ def package_owners(paths: list[str], source: str) -> dict[str, str]:
             if match:
                 owners[match.group(1)] = match.group(2)
         return owners
+    if source in {"dnf", "zypper"} and which("rpm"):
+        for path in paths:
+            code, output = run_capture(["rpm", "-qf", "--qf", "%{NAME}\n", path], timeout=10)
+            if code == 0:
+                package = output.splitlines()[0].strip()
+                if package:
+                    owners[path] = package
+        return owners
     if source == "apt" and which("dpkg-query"):
         for path in paths:
             code, output = run_capture(["dpkg-query", "-S", path], timeout=10)
@@ -392,7 +478,7 @@ def desktop_package_index() -> dict[tuple[str, str], dict[str, Any]]:
         for item in entries
         if item.get("sourceHint") == "desktop" and item.get("desktopPath", "").startswith(("/usr/share", "/usr/local/share"))
     ]
-    native_source = "pacman" if which("pacman") else "apt" if apt_available() else ""
+    native_source = native_package_source()
     owners = package_owners(native_paths, native_source) if native_source else {}
 
     for item in entries:
@@ -502,6 +588,43 @@ def enrich_item(item: dict[str, Any], desktop_index: dict[tuple[str, str], dict[
     return enriched
 
 
+def search_desktop_apps(query: str, desktop_index: dict[tuple[str, str], dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    term = query.casefold().strip()
+    if not term:
+        return []
+    desktop_index = desktop_index if desktop_index is not None else desktop_package_index()
+    results = []
+    seen: set[str] = set()
+    for item in desktop_index.values():
+        if item.get("source") == "desktop":
+            continue
+        desktop_id = str(item.get("desktopId", ""))
+        if not desktop_id or desktop_id in seen:
+            continue
+        haystack = " ".join(
+            str(item.get(key, ""))
+            for key in ("name", "genericName", "description", "package", "desktopId", "categories")
+        ).casefold()
+        if term not in haystack:
+            continue
+        seen.add(desktop_id)
+        results.append(
+            {
+                "id": item.get("package"),
+                "name": item.get("name", item.get("package", "")),
+                "packageName": item.get("package"),
+                "version": "",
+                "source": item.get("source", "desktop"),
+                "description": item.get("description", ""),
+                "icon": find_theme_icon(str(item.get("icon", ""))) or item.get("icon", ""),
+                "desktopId": desktop_id,
+                "desktopPath": item.get("desktopPath", ""),
+                "gui": True,
+            }
+        )
+    return results
+
+
 def list_pacman_installed(aur_only: bool = False) -> list[dict[str, Any]]:
     command = ["pacman", "-Qm" if aur_only else "-Qn"]
     code, output = run_capture(command)
@@ -532,6 +655,62 @@ def list_apt_installed() -> list[dict[str, Any]]:
         parts = line.split("\t", 1)
         if parts and parts[0]:
             items.append({"name": parts[0], "version": parts[1] if len(parts) > 1 else "", "source": "apt"})
+    return items
+
+
+def list_rpm_installed(source: str) -> list[dict[str, Any]]:
+    if not which("rpm"):
+        return []
+    code, output = run_capture(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"], timeout=45)
+    if code != 0:
+        return []
+    items = []
+    for line in output.splitlines():
+        parts = line.split("\t", 1)
+        if parts and parts[0]:
+            items.append({"name": parts[0], "version": parts[1] if len(parts) > 1 else "", "source": source})
+    return items
+
+
+def list_apk_installed() -> list[dict[str, Any]]:
+    if not apk_available():
+        return []
+    code, output = run_capture(["apk", "info", "-v"], timeout=30)
+    if code != 0:
+        return []
+    return [{"name": line.strip(), "version": "", "source": "apk"} for line in output.splitlines() if line.strip()]
+
+
+def list_xbps_installed() -> list[dict[str, Any]]:
+    if not xbps_available():
+        return []
+    code, output = run_capture(["xbps-query", "-l"], timeout=45)
+    if code != 0:
+        return []
+    items = []
+    for line in output.splitlines():
+        parts = line.split(maxsplit=2)
+        if len(parts) >= 2:
+            name_version = parts[1]
+            name, version = name_version, ""
+            if "-" in name_version:
+                name, version = name_version.rsplit("-", 1)
+            items.append({"name": name, "version": version, "source": "xbps"})
+    return items
+
+
+def list_eopkg_installed() -> list[dict[str, Any]]:
+    if not eopkg_available():
+        return []
+    code, output = run_capture(["eopkg", "list-installed"], timeout=45)
+    if code != 0:
+        return []
+    items = []
+    for line in output.splitlines():
+        parts = line.split(" - ", 1)
+        first = parts[0].split()
+        if first:
+            items.append({"name": first[0], "version": first[1] if len(first) > 1 else "", "source": "eopkg"})
     return items
 
 
@@ -656,7 +835,7 @@ def list_desktop_installed() -> list[dict[str, Any]]:
     known_keys = {
         (item.get("source"), item.get("package"))
         for item in desktop_index.values()
-        if item.get("source") in {"apt", "pacman", "aur", "flatpak", "snap", "manual"}
+        if item.get("source") in set(SOURCE_ORDER) - {"desktop"}
     }
     seen: set[str] = set()
     for item in desktop_index.values():
@@ -722,6 +901,77 @@ def parse_apt_search(output: str) -> list[dict[str, Any]]:
         package = name.split("/", 1)[0].strip()
         if package:
             items.append({"name": package, "version": "", "description": description.strip(), "source": "apt"})
+    return items[:80]
+
+
+def parse_dnf_search(output: str) -> list[dict[str, Any]]:
+    items = []
+    for line in output.splitlines():
+        if " : " not in line:
+            continue
+        left, description = line.split(" : ", 1)
+        name = left.strip().split()[0].rsplit(".", 1)[0]
+        if name:
+            items.append({"name": name, "version": "", "description": description.strip(), "source": "dnf"})
+    return items[:80]
+
+
+def parse_zypper_search(output: str) -> list[dict[str, Any]]:
+    items = []
+    for line in output.splitlines():
+        if "|" not in line or line.lstrip().startswith(("-", "S ")):
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) >= 3 and parts[1] and parts[1].lower() != "name":
+            items.append(
+                {
+                    "name": parts[1],
+                    "version": parts[3] if len(parts) > 3 else "",
+                    "description": parts[2],
+                    "source": "zypper",
+                }
+            )
+    return items[:80]
+
+
+def parse_apk_search(output: str) -> list[dict[str, Any]]:
+    items = []
+    for line in output.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        package = text.split()[0]
+        name = package.rsplit("-", 1)[0] if "-" in package else package
+        items.append({"name": name, "version": "", "description": text, "source": "apk"})
+    return items[:80]
+
+
+def parse_xbps_search(output: str) -> list[dict[str, Any]]:
+    items = []
+    for line in output.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        parts = text.split(maxsplit=2)
+        if len(parts) >= 2:
+            name_version = parts[1]
+            name, version = name_version, ""
+            if "-" in name_version:
+                name, version = name_version.rsplit("-", 1)
+            items.append({"name": name, "version": version, "description": parts[2] if len(parts) > 2 else "", "source": "xbps"})
+    return items[:80]
+
+
+def parse_eopkg_search(output: str) -> list[dict[str, Any]]:
+    items = []
+    for line in output.splitlines():
+        text = line.strip()
+        if not text or text.startswith(("Searching", "Package")):
+            continue
+        parts = text.split(" - ", 1)
+        name = parts[0].split()[0]
+        if name:
+            items.append({"name": name, "version": "", "description": parts[1] if len(parts) > 1 else "", "source": "eopkg"})
     return items[:80]
 
 
@@ -851,10 +1101,7 @@ def parse_appstream_search(output: str) -> list[dict[str, Any]]:
             if len(parts) >= 2:
                 name = parts[1]
         elif item.get("package"):
-            if apt_available():
-                source = "apt"
-            elif which("pacman"):
-                source = "pacman"
+            source = native_package_source()
         if not source or not name:
             continue
         results.append(
@@ -890,6 +1137,16 @@ def search_packages(source: str, query: str) -> list[dict[str, Any]]:
         require_apt()
         code, output = run_capture(["apt-cache", "search", query], timeout=30)
         return parse_apt_search(output) if code in (0, 1) else []
+    if source == "dnf":
+        dnf = dnf_binary()
+        if not dnf:
+            raise ApiError("dnf is not installed or not in PATH.", 404)
+        code, output = run_capture([dnf, "search", query], timeout=30)
+        return parse_dnf_search(output) if code in (0, 1) else []
+    if source == "zypper":
+        require_binary("zypper")
+        code, output = run_capture(["zypper", "--non-interactive", "search", "-s", query], timeout=30)
+        return parse_zypper_search(output) if code in (0, 1) else []
     if source == "pacman":
         require_binary("pacman")
         code, output = run_capture(["pacman", "-Ss", "--color=never", query], timeout=30)
@@ -900,6 +1157,18 @@ def search_packages(source: str, query: str) -> list[dict[str, Any]]:
             raise ApiError("Install yay or paru to search the AUR.", 404)
         code, output = run_capture([helper, "-Ss", "--color=never", query], timeout=45)
         return parse_pacman_search(output, "aur") if code in (0, 1) else []
+    if source == "apk":
+        require_binary("apk")
+        code, output = run_capture(["apk", "search", query], timeout=30)
+        return parse_apk_search(output) if code in (0, 1) else []
+    if source == "xbps":
+        require_binary("xbps-query")
+        code, output = run_capture(["xbps-query", "-Rs", query], timeout=30)
+        return parse_xbps_search(output) if code in (0, 1) else []
+    if source == "eopkg":
+        require_binary("eopkg")
+        code, output = run_capture(["eopkg", "search", query], timeout=30)
+        return parse_eopkg_search(output) if code in (0, 1) else []
     if source == "flatpak":
         require_binary("flatpak")
         code, output = run_capture(["flatpak", "search", query], timeout=30)
@@ -927,14 +1196,45 @@ def search_all_packages(query: str, include_non_gui: bool = True) -> list[dict[s
     query = query.strip()
     if len(query) < 2:
         return []
+    term = query.casefold()
     desktop_index = desktop_package_index()
     results: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def result_key(item: dict[str, Any]) -> tuple[str, str]:
+        source = str(item.get("source", ""))
+        if item.get("gui"):
+            app_id = str(item.get("desktopId") or item.get("id") or "")
+            if app_id:
+                return source, app_id
+        return source, str(item.get("packageName") or item.get("id") or item.get("name"))
+
+    seen_named_packages: set[tuple[str, str, str]] = set()
+
+    def named_package_key(item: dict[str, Any]) -> tuple[str, str, str] | None:
+        source = str(item.get("source", ""))
+        package = str(item.get("packageName") or item.get("id") or "")
+        name = str(item.get("name") or "")
+        if source and package and name:
+            return source, package.casefold(), name.casefold()
+        return None
+
+    def add_result(item: dict[str, Any]) -> None:
+        key = result_key(item)
+        named_key = named_package_key(item)
+        if named_key and named_key in seen_named_packages and key not in results:
+            return
+        if key not in results or not results[key].get("gui"):
+            results[key] = item
+        if named_key:
+            seen_named_packages.add(named_key)
+
+    for item in search_desktop_apps(query, desktop_index):
+        add_result(item)
     for item in search_appstream(query):
         if not include_non_gui and not item.get("gui"):
             continue
         enriched = enrich_item(item, desktop_index)
-        key = (str(enriched.get("source", "")), str(enriched.get("packageName") or enriched.get("id") or enriched.get("name")))
-        results[key] = enriched
+        add_result(enriched)
 
     if include_non_gui:
         for source in SOURCE_ORDER:
@@ -946,14 +1246,30 @@ def search_all_packages(query: str, include_non_gui: bool = True) -> list[dict[s
                 continue
             for item in items:
                 enriched = enrich_item(item, desktop_index)
-                key = (str(enriched.get("source", "")), str(enriched.get("packageName") or enriched.get("id") or enriched.get("name")))
+                key = result_key(enriched)
                 if key in results and results[key].get("gui"):
                     continue
-                results[key] = enriched
+                add_result(enriched)
+
+    def relevance(item: dict[str, Any]) -> int:
+        name = str(item.get("name", "")).casefold()
+        package = str(item.get("packageName") or item.get("id") or "").casefold()
+        desktop_id = str(item.get("desktopId") or item.get("id") or "").casefold()
+        description = str(item.get("description", "")).casefold()
+        if term in {name, package, desktop_id}:
+            return 0
+        if name.startswith(term) or package.startswith(term) or desktop_id.startswith(term):
+            return 1
+        if term in name or term in package or term in desktop_id:
+            return 2
+        if term in description:
+            return 3
+        return 4
 
     return sorted(
         results.values(),
         key=lambda item: (
+            relevance(item),
             0 if item.get("gui") else 1,
             SOURCE_ORDER.index(item.get("source")) if item.get("source") in SOURCE_ORDER else 99,
             str(item.get("name", "")).lower(),
@@ -966,6 +1282,14 @@ def install_command(source: str, name: str) -> tuple[str, list[str]]:
     if source == "apt":
         require_apt()
         return f"APT installs {package}", privileged(["apt-get", "install", "-y", package])
+    if source == "dnf":
+        dnf = dnf_binary()
+        if not dnf:
+            raise ApiError("dnf is not installed or not in PATH.", 404)
+        return f"dnf installs {package}", privileged([dnf, "install", "-y", package])
+    if source == "zypper":
+        require_binary("zypper")
+        return f"zypper installs {package}", privileged(["zypper", "--non-interactive", "install", package])
     if source == "pacman":
         require_binary("pacman")
         return f"Pacman installs {package}", privileged(["pacman", "-S", "--needed", "--noconfirm", package])
@@ -974,6 +1298,15 @@ def install_command(source: str, name: str) -> tuple[str, list[str]]:
         if not helper:
             raise ApiError("Install yay or paru to install AUR packages.", 404)
         return f"AUR installs {package}", [helper, "-S", "--needed", "--noconfirm", *aur_sudo_options(), package]
+    if source == "apk":
+        require_binary("apk")
+        return f"apk installs {package}", privileged(["apk", "add", package])
+    if source == "xbps":
+        require_binary("xbps-install")
+        return f"xbps installs {package}", privileged(["xbps-install", "-Sy", package])
+    if source == "eopkg":
+        require_binary("eopkg")
+        return f"eopkg installs {package}", privileged(["eopkg", "-y", "install", package])
     if source == "flatpak":
         require_binary("flatpak")
         return f"Flatpak installs {package}", ["flatpak", "install", "-y", "flathub", package]
@@ -997,6 +1330,14 @@ def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
     if source == "apt":
         require_apt()
         return f"APT removes {package}", privileged(["apt-get", "purge", "-y", package])
+    if source == "dnf":
+        dnf = dnf_binary()
+        if not dnf:
+            raise ApiError("dnf is not installed or not in PATH.", 404)
+        return f"dnf removes {package}", privileged([dnf, "remove", "-y", package])
+    if source == "zypper":
+        require_binary("zypper")
+        return f"zypper removes {package}", privileged(["zypper", "--non-interactive", "remove", package])
     if source == "pacman":
         require_binary("pacman")
         return f"Pacman removes {package}", privileged(["pacman", "-Rns", "--noconfirm", package])
@@ -1006,6 +1347,15 @@ def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
             return f"AUR removes {package}", [helper, "-Rns", "--noconfirm", *aur_sudo_options(), package]
         require_binary("pacman")
         return f"Pacman removes AUR package {package}", privileged(["pacman", "-Rns", "--noconfirm", package])
+    if source == "apk":
+        require_binary("apk")
+        return f"apk removes {package}", privileged(["apk", "del", package])
+    if source == "xbps":
+        require_binary("xbps-remove")
+        return f"xbps removes {package}", privileged(["xbps-remove", "-R", package])
+    if source == "eopkg":
+        require_binary("eopkg")
+        return f"eopkg removes {package}", privileged(["eopkg", "-y", "remove", package])
     if source == "flatpak":
         require_binary("flatpak")
         return f"Flatpak removes {package}", ["flatpak", "uninstall", "-y", package]
@@ -1058,7 +1408,7 @@ def run_job(job_id: str) -> None:
         with JOBS_LOCK:
             JOBS[job_id].state = "failed"
             JOBS[job_id].exit_code = 127
-            JOBS[job_id].output.append("Befehl was not found.")
+            JOBS[job_id].output.append("Command was not found.")
     except Exception as exc:  # noqa: BLE001 - API boundary
         with JOBS_LOCK:
             JOBS[job_id].state = "failed"
@@ -1212,8 +1562,13 @@ def status() -> dict[str, Any]:
                 "available": apt_available(),
                 "detail": which("apt-cache") or "apt-cache missing",
             },
+            "dnf": {"available": bool(dnf_binary()), "detail": dnf_binary() or "dnf missing"},
+            "zypper": {"available": zypper_available(), "detail": which("zypper") or "zypper missing"},
             "pacman": {"available": bool(which("pacman")), "detail": ", ".join(pacman_repos) or "pacman"},
             "aur": {"available": bool(helper), "detail": helper or "yay/paru missing"},
+            "apk": {"available": apk_available(), "detail": which("apk") or "apk missing"},
+            "xbps": {"available": xbps_available(), "detail": which("xbps-query") or "xbps missing"},
+            "eopkg": {"available": eopkg_available(), "detail": which("eopkg") or "eopkg missing"},
             "flatpak": {"available": bool(which("flatpak")), "detail": which("flatpak") or "flatpak missing"},
             "snap": {"available": bool(which("snap")), "detail": which("snap") or "snap missing"},
             "brew": {"available": bool(which("brew")), "detail": which("brew") or "brew missing"},
@@ -1227,8 +1582,13 @@ def status() -> dict[str, Any]:
 def list_installed(source: str | None) -> list[dict[str, Any]]:
     mapping = {
         "apt": list_apt_installed,
+        "dnf": lambda: list_rpm_installed("dnf"),
+        "zypper": lambda: list_rpm_installed("zypper"),
         "pacman": lambda: list_pacman_installed(False),
         "aur": lambda: list_pacman_installed(True),
+        "apk": list_apk_installed,
+        "xbps": list_xbps_installed,
+        "eopkg": list_eopkg_installed,
         "flatpak": list_flatpak_installed,
         "snap": list_snap_installed,
         "brew": list_brew_installed,
@@ -1243,7 +1603,9 @@ def list_installed(source: str | None) -> list[dict[str, Any]]:
         desktop_index = desktop_package_index()
         return [enrich_item(item, desktop_index) for item in mapping[source]()]
     items: list[dict[str, Any]] = []
-    for getter in mapping.values():
+    for source_id, getter in mapping.items():
+        if source_id == "desktop":
+            continue
         items.extend(getter())
     desktop_index = desktop_package_index()
     items = [enrich_item(item, desktop_index) for item in items]
@@ -1251,7 +1613,7 @@ def list_installed(source: str | None) -> list[dict[str, Any]]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ArchSoftwareManager/1.0"
+    server_version = "OmniPkg/1.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -1309,7 +1671,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ApiError("Job was not found.", 404)
                 self.send_json(job_to_dict(job))
             return
-        raise ApiError("API-Endpunkt was not found.", 404)
+        raise ApiError("API endpoint was not found.", 404)
 
     def handle_api_post(self, path: str, payload: dict[str, Any]) -> None:
         if path == "/api/install":
@@ -1331,7 +1693,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/manual/archive":
             self.send_json({"entry": install_archive(payload)})
             return
-        raise ApiError("API-Endpunkt was not found.", 404)
+        raise ApiError("API endpoint was not found.", 404)
 
     def serve_static(self, path: str) -> None:
         if path in ("", "/"):

@@ -21,6 +21,7 @@ current system and only enables the sources that can actually be used.
   background system packages
 - Real application names and icons from `.desktop` files, icon themes and
   AppStream metadata
+- German UI when the system locale starts with `de`, English everywhere else
 - Native GTK4 desktop app, no local browser service
 - Manual AppImage and archive installation with desktop launcher generation
 - Installer script for app files, launcher setup and optional sudoers setup
@@ -31,8 +32,13 @@ OmniPkg uses a source only when its tools are installed.
 
 - **APT** on Debian, Ubuntu and compatible systems via `apt-cache`, `apt-get`
   and `dpkg-query`
+- **DNF** on Fedora, RHEL and compatible systems via `dnf5` or `dnf`
+- **Zypper** on openSUSE and SUSE systems
 - **Pacman** for Arch repositories
 - **AUR** via `yay` or `paru`
+- **APK** on Alpine Linux
+- **XBPS** on Void Linux
+- **eopkg** on Solus
 - **Flatpak**
 - **Snap**
 - **Homebrew**
@@ -48,6 +54,7 @@ Quickstart:
 ```bash
 git clone https://github.com/YOUR-USER/OmniPkg.git
 cd OmniPkg
+chmod +x install.sh
 ./install.sh
 ```
 
@@ -65,7 +72,7 @@ It also creates:
 
 ```text
 ~/.local/bin/omnipkg
-~/.local/share/applications/omnipkg.desktop
+~/.local/share/applications/dev.omnipkg.omnipkg.desktop
 ~/.local/share/icons/hicolor/512x512/apps/omnipkg.png
 ~/.local/share/pixmaps/omnipkg.png
 ```
@@ -103,8 +110,9 @@ sudoers file at:
 ```
 
 That rule allows the current user to run detected system package managers such
-as `apt-get`, `pacman`, `snap` or `flatpak` without another password prompt from
-inside OmniPkg. If you prefer not to install that rule, use:
+as `apt-get`, `dnf`, `zypper`, `pacman`, `apk`, `xbps`, `eopkg`, `snap` or
+`flatpak` without another password prompt from inside OmniPkg. If you prefer not
+to install that rule, use:
 
 ```bash
 ./install.sh --no-sudoers
@@ -127,6 +135,17 @@ OmniPkg reads local desktop launchers from common Linux locations:
 When a package provides a graphical application, OmniPkg uses the same name and
 icon that your desktop environment uses in the application menu. For search
 results, OmniPkg also uses AppStream metadata when `appstreamcli` is available.
+
+## Language
+
+OmniPkg starts in German when the system locale begins with `de`, for example
+`de_DE.UTF-8`. Every other locale uses English. You can override the language
+for one launch with:
+
+```bash
+OMNIPKG_LANG=de omnipkg
+OMNIPKG_LANG=en omnipkg
+```
 
 ## Manual Installs
 

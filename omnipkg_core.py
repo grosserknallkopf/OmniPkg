@@ -258,13 +258,22 @@ def require_pipx() -> str:
     return require_binary("pipx")
 
 
+def path_is_inside_home(value: str) -> bool:
+    try:
+        path = Path(value).expanduser().resolve()
+        home = Path.home().resolve()
+        return path == home or home in path.parents
+    except OSError:
+        return value.startswith(str(Path.home()))
+
+
 def npm_command(args: list[str]) -> list[str]:
     npm = require_binary("npm")
     code, output = run_capture([npm, "config", "get", "prefix"], timeout=10)
     prefix = output.strip() if code == 0 else ""
-    if prefix.startswith(str(Path.home())):
+    if prefix and path_is_inside_home(prefix):
         return [npm, *args]
-    return privileged([npm, *args])
+    return [npm, "--prefix", str(Path.home() / ".local"), *args]
 
 
 def apt_available() -> bool:
@@ -932,7 +941,7 @@ def list_brew_installed() -> list[dict[str, Any]]:
 def list_npm_installed() -> list[dict[str, Any]]:
     if not which("npm"):
         return []
-    code, output = run_capture(["npm", "-g", "ls", "--depth=0", "--json"], timeout=30)
+    code, output = run_capture(npm_command(["-g", "ls", "--depth=0", "--json"]), timeout=30)
     if code not in (0, 1):
         return []
     try:
@@ -1859,8 +1868,7 @@ def list_updates(source: str) -> list[dict[str, Any]]:
         code, output = run_capture([brew, "outdated", "--json=v2"], timeout=60)
         return parse_brew_updates(output) if code in (0, 1) else []
     if source == "npm":
-        require_binary("npm")
-        code, output = run_capture(["npm", "outdated", "-g", "--json"], timeout=60)
+        code, output = run_capture(npm_command(["outdated", "-g", "--json"]), timeout=60)
         return parse_npm_updates(output) if code in (0, 1) else []
     if source == "pip":
         if not which("pipx"):

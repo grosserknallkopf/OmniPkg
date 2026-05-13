@@ -136,7 +136,10 @@ Keep the source directory after installing:
 ## Admin Rights
 
 OmniPkg intentionally runs as a normal user. That keeps AUR, npm and pipx
-operations out of a permanent root context.
+operations out of a permanent root context. If npm itself is installed by the
+system package manager and points to a system prefix such as `/usr`, OmniPkg
+uses `~/.local` for npm global packages instead of writing into
+`/usr/lib/node_modules`.
 
 For system package managers, the installer can optionally create a narrow
 sudoers file at:

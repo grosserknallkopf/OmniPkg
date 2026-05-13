@@ -7,6 +7,8 @@
 # OmniPkg
 
 ### **Install it with OmniPkg. Keep it in one place.**
+</div>
+<br>
 
 OmniPkg is a native Linux software manager for people who use more than one
 package ecosystem. It brings distro repositories, app stores, developer package

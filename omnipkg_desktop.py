@@ -96,6 +96,7 @@ TRANSLATIONS = {
         "install_archive": "Install archive",
         "install_manager": "Install package managers",
         "install_manager_failed": "Package manager installation failed: {error}",
+        "install_manager_missing_after": "{name} installation finished, but OmniPkg still cannot find it.",
         "install_manager_started": "Installing package manager: {name}",
         "install_missing_manager_prompt": "{name} is not installed. Install it now?",
         "install_missing_manager_chip": "{name}: missing. install?",
@@ -191,6 +192,7 @@ TRANSLATIONS = {
         "install_archive": "Archiv installieren",
         "install_manager": "Paketmanager installieren",
         "install_manager_failed": "Paketmanager-Installation fehlgeschlagen: {error}",
+        "install_manager_missing_after": "{name}-Installation ist beendet, aber OmniPkg findet den Paketmanager noch nicht.",
         "install_manager_started": "Paketmanager wird installiert: {name}",
         "install_missing_manager_prompt": "{name} ist nicht installiert. Jetzt installieren?",
         "install_missing_manager_chip": "{name}: fehlt. installieren?",
@@ -1564,6 +1566,13 @@ class MainWindow(Gtk.ApplicationWindow):
                     message = tr("job_failed", label=job.label, code=job.exit_code)
                     self.log(message)
                     self.show_error_details(message, details)
+                if job.state == "done" and manager_tool:
+                    tool = next((item for item in core.package_manager_tools() if str(item.get("id")) == manager_tool), None)
+                    if tool and not tool.get("installed"):
+                        name = str(tool.get("name") or manager_tool)
+                        message = tr("install_manager_missing_after", name=name)
+                        self.log(message)
+                        self.show_error_details(message, details)
                 if self.results:
                     self.render_results()
                 self.load_installed()

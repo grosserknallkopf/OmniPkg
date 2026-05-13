@@ -143,6 +143,16 @@ class Job:
 
 JOBS: dict[str, Job] = {}
 JOBS_LOCK = threading.Lock()
+PACMAN_JOB_LOCK = threading.Lock()
+PACMAN_LOCK_PATH = Path("/var/lib/pacman/db.lck")
+PACMAN_LOCK_WAIT_SECONDS = 180
+EXTRA_BINARY_PATHS = {
+    "brew": (
+        Path("/home/linuxbrew/.linuxbrew/bin/brew"),
+        Path("/opt/homebrew/bin/brew"),
+        Path("/usr/local/bin/brew"),
+    )
+}
 
 
 class ApiError(Exception):
@@ -157,7 +167,13 @@ def now_ms() -> int:
 
 
 def which(binary: str) -> str | None:
-    return shutil.which(binary)
+    found = shutil.which(binary)
+    if found:
+        return found
+    for path in EXTRA_BINARY_PATHS.get(binary, ()):
+        if path.exists() and os.access(path, os.X_OK):
+            return str(path)
+    return None
 
 
 def run_capture(command: list[str], timeout: int = 20) -> tuple[int, str]:
@@ -893,9 +909,10 @@ def list_snap_installed() -> list[dict[str, Any]]:
 
 
 def list_brew_installed() -> list[dict[str, Any]]:
-    if not which("brew"):
+    brew = which("brew")
+    if not brew:
         return []
-    code, output = run_capture(["brew", "list", "--versions"], timeout=30)
+    code, output = run_capture([brew, "list", "--versions"], timeout=30)
     if code != 0:
         return []
     items = []
@@ -1324,8 +1341,8 @@ def search_packages(source: str, query: str) -> list[dict[str, Any]]:
         code, output = run_capture(["snap", "find", query], timeout=30)
         return parse_snap_search(output) if code in (0, 1) else []
     if source == "brew":
-        require_binary("brew")
-        code, output = run_capture(["brew", "search", query], timeout=30)
+        brew = require_binary("brew")
+        code, output = run_capture([brew, "search", query], timeout=30)
         return parse_simple_lines(output, "brew") if code in (0, 1) else []
     if source == "npm":
         require_binary("npm")
@@ -1460,8 +1477,8 @@ def install_command(source: str, name: str) -> tuple[str, list[str]]:
         require_binary("snap")
         return f"Snap installs {package}", privileged(["snap", "install", package])
     if source == "brew":
-        require_binary("brew")
-        return f"Homebrew installs {package}", ["brew", "install", package]
+        brew = require_binary("brew")
+        return f"Homebrew installs {package}", [brew, "install", package]
     if source == "npm":
         return f"npm installs {package}", npm_command(["install", "-g", package])
     if source == "pip":
@@ -1508,8 +1525,8 @@ def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
         require_binary("snap")
         return f"Snap removes {package}", privileged(["snap", "remove", package])
     if source == "brew":
-        require_binary("brew")
-        return f"Homebrew removes {package}", ["brew", "uninstall", package]
+        brew = require_binary("brew")
+        return f"Homebrew removes {package}", [brew, "uninstall", package]
     if source == "npm":
         return f"npm removes {package}", npm_command(["uninstall", "-g", package])
     if source == "pip":
@@ -1575,10 +1592,10 @@ def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
             return f"Snap refreshes {package}", privileged(["snap", "refresh", package])
         return "Snap refreshes packages", privileged(["snap", "refresh"])
     if source == "brew":
-        require_binary("brew")
+        brew = require_binary("brew")
         if package:
-            return f"Homebrew updates {package}", ["brew", "upgrade", package]
-        return "Homebrew updates packages", ["brew", "upgrade"]
+            return f"Homebrew updates {package}", [brew, "upgrade", package]
+        return "Homebrew updates packages", [brew, "upgrade"]
     if source == "npm":
         if package:
             return f"npm updates {package}", npm_command(["update", "-g", package])
@@ -1838,8 +1855,8 @@ def list_updates(source: str) -> list[dict[str, Any]]:
         code, output = run_capture(["snap", "refresh", "--list"], timeout=45)
         return parse_snap_updates(output) if code in (0, 1) else []
     if source == "brew":
-        require_binary("brew")
-        code, output = run_capture(["brew", "outdated", "--json=v2"], timeout=60)
+        brew = require_binary("brew")
+        code, output = run_capture([brew, "outdated", "--json=v2"], timeout=60)
         return parse_brew_updates(output) if code in (0, 1) else []
     if source == "npm":
         require_binary("npm")
@@ -2030,6 +2047,61 @@ def install_package_manager_command(tool_id: str) -> tuple[str, list[str]]:
     raise ApiError("Unknown package manager installer.", 404)
 
 
+def append_job_output(job_id: str, message: str) -> None:
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if job:
+            job.output.append(message)
+
+
+def command_uses_pacman_database(command: list[str]) -> bool:
+    pacman_tools = {"pacman", "yay", "paru"}
+    for part in command:
+        if Path(part).name in pacman_tools:
+            return True
+    return any(tool in " ".join(command) for tool in ("pacman", "yay", "paru"))
+
+
+def pacman_lock_has_owner() -> bool | None:
+    fuser = which("fuser")
+    if fuser:
+        code, output = run_capture([fuser, str(PACMAN_LOCK_PATH)], timeout=5)
+        return code == 0 and bool(output.strip())
+    lsof = which("lsof")
+    if lsof:
+        code, output = run_capture([lsof, "-t", str(PACMAN_LOCK_PATH)], timeout=5)
+        return code == 0 and bool(output.strip())
+    return None
+
+
+def wait_for_pacman_database(job_id: str) -> bool:
+    if not PACMAN_LOCK_PATH.exists():
+        return True
+    if detected_language() == "de":
+        waiting_message = f"Warte auf Pacman-Datenbanksperre: {PACMAN_LOCK_PATH}"
+        timeout_message = (
+            "Die Pacman-Datenbank ist immer noch gesperrt. Schließen Sie zuerst andere Paketmanager. "
+            f"Wenn keiner läuft, entfernen Sie {PACMAN_LOCK_PATH} manuell und versuchen Sie es erneut."
+        )
+    else:
+        waiting_message = f"Waiting for pacman database lock: {PACMAN_LOCK_PATH}"
+        timeout_message = (
+            "Pacman database is still locked. Close other package managers first. "
+            f"If none is running, remove {PACMAN_LOCK_PATH} manually and try again."
+        )
+    append_job_output(job_id, waiting_message)
+    deadline = time.monotonic() + PACMAN_LOCK_WAIT_SECONDS
+    while PACMAN_LOCK_PATH.exists():
+        if pacman_lock_has_owner() is False:
+            append_job_output(job_id, timeout_message)
+            return False
+        if time.monotonic() >= deadline:
+            append_job_output(job_id, timeout_message)
+            return False
+        time.sleep(1)
+    return True
+
+
 def start_job(label: str, command: list[str]) -> Job:
     job = Job(id=uuid.uuid4().hex[:12], label=label, command=command)
     with JOBS_LOCK:
@@ -2043,23 +2115,31 @@ def run_job(job_id: str) -> None:
     with JOBS_LOCK:
         job = JOBS[job_id]
         job.state = "running"
+        command = list(job.command)
+    lock_context = PACMAN_JOB_LOCK if command_uses_pacman_database(command) else threading.Lock()
     try:
-        proc = subprocess.Popen(
-            job.command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-        )
-        assert proc.stdout is not None
-        for line in proc.stdout:
+        with lock_context:
+            if command_uses_pacman_database(command) and not wait_for_pacman_database(job_id):
+                with JOBS_LOCK:
+                    JOBS[job_id].exit_code = 75
+                    JOBS[job_id].state = "failed"
+                return
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                bufsize=1,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                with JOBS_LOCK:
+                    JOBS[job_id].output.append(line.rstrip("\n"))
+            code = proc.wait()
             with JOBS_LOCK:
-                JOBS[job_id].output.append(line.rstrip("\n"))
-        code = proc.wait()
-        with JOBS_LOCK:
-            JOBS[job_id].exit_code = code
-            JOBS[job_id].state = "done" if code == 0 else "failed"
+                JOBS[job_id].exit_code = code
+                JOBS[job_id].state = "done" if code == 0 else "failed"
     except FileNotFoundError:
         with JOBS_LOCK:
             JOBS[job_id].state = "failed"

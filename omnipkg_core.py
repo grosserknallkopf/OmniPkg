@@ -74,6 +74,22 @@ SYSTEM_SOURCE_ORDER = (
     "xbps",
     "eopkg",
 )
+PACKAGEKIT_SOURCE_ORDER = (
+    "apt",
+    "dnf",
+    "zypper",
+)
+PACKAGEKIT_LINE_STATUSES = {
+    "available",
+    "blocked",
+    "bugfix",
+    "enhancement",
+    "important",
+    "installed",
+    "low",
+    "normal",
+    "security",
+}
 PACKAGE_MANAGER_TOOLS = (
     {
         "id": "brew",
@@ -295,6 +311,43 @@ def zypper_available() -> bool:
     return bool(which("zypper"))
 
 
+def packagekit_available() -> bool:
+    return bool(which("pkcon"))
+
+
+def native_adapter_available(source: str) -> bool:
+    if source == "apt":
+        return apt_available()
+    if source == "dnf":
+        return bool(dnf_binary())
+    if source == "zypper":
+        return zypper_available()
+    return False
+
+
+def packagekit_available_for_source(source: str) -> bool:
+    return source in PACKAGEKIT_SOURCE_ORDER and packagekit_available() and native_adapter_available(source)
+
+
+def require_packagekit(source: str = "") -> str:
+    pkcon = which("pkcon")
+    if not pkcon:
+        raise ApiError("PackageKit is not installed or pkcon is not in PATH.", 404)
+    if source and source not in PACKAGEKIT_SOURCE_ORDER:
+        raise ApiError("PackageKit is not configured for this source.", 404)
+    return pkcon
+
+
+def packagekit_command(action: str, packages: list[str] | None = None, force_refresh: bool = False) -> list[str]:
+    pkcon = require_packagekit()
+    command = [pkcon, "-y", action]
+    if action == "refresh" and force_refresh:
+        command.append("force")
+    if packages:
+        command.extend(packages)
+    return command
+
+
 def apk_available() -> bool:
     return bool(which("apk"))
 
@@ -364,6 +417,8 @@ def native_install_command(packages: dict[str, list[str]], label: str) -> tuple[
     names = packages.get(source)
     if not source or not names:
         raise ApiError("No supported system package manager was found for this installer.", 404)
+    if packagekit_available_for_source(source):
+        return label, packagekit_command("install", names)
     if source == "apt":
         require_apt()
         return label, privileged(["apt-get", "install", "-y", *names])
@@ -912,6 +967,10 @@ def list_pacman_installed(aur_only: bool = False) -> list[dict[str, Any]]:
 
 
 def list_apt_installed() -> list[dict[str, Any]]:
+    if packagekit_available_for_source("apt"):
+        items = list_packagekit_installed("apt")
+        if items is not None:
+            return items
     if not apt_available():
         return []
     code, output = run_capture(["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\n"], timeout=45)
@@ -926,6 +985,10 @@ def list_apt_installed() -> list[dict[str, Any]]:
 
 
 def list_rpm_installed(source: str) -> list[dict[str, Any]]:
+    if packagekit_available_for_source(source):
+        items = list_packagekit_installed(source)
+        if items is not None:
+            return items
     if not which("rpm"):
         return []
     code, output = run_capture(["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}\n"], timeout=45)
@@ -1213,6 +1276,87 @@ def parse_zypper_search(output: str) -> list[dict[str, Any]]:
     return items[:80]
 
 
+def parse_packagekit_package_line(line: str, source: str) -> dict[str, Any] | None:
+    text = re.sub(r"\x1b\[[0-9;]*m", "", line).strip()
+    if not text or "[" in text and "]" in text:
+        return None
+    package_id = ""
+    description = ""
+    match = re.search(r"(\S+;\S*;\S*;\S+)", text)
+    if match:
+        package_id = match.group(1)
+        description = text[match.end():].strip(" \t-")
+    else:
+        parts = text.split(maxsplit=2)
+        if len(parts) < 2:
+            return None
+        if parts[0].strip(":").casefold() not in PACKAGEKIT_LINE_STATUSES:
+            return None
+        package_id = parts[1]
+        description = parts[2].strip(" \t-") if len(parts) > 2 else ""
+    package_parts = package_id.split(";")
+    name = package_parts[0].strip()
+    if not name or name.lower() in {"package", "loading", "querying", "refreshing", "finished"}:
+        return None
+    version = package_parts[1].strip() if len(package_parts) > 1 else ""
+    return {
+        "name": name,
+        "packageName": name,
+        "version": version,
+        "description": description,
+        "source": source,
+    }
+
+
+def parse_packagekit_packages(output: str, source: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in output.splitlines():
+        item = parse_packagekit_package_line(line, source)
+        if not item:
+            continue
+        key = str(item.get("name", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(item)
+    return items
+
+
+def parse_packagekit_updates(output: str, source: str) -> list[dict[str, Any]]:
+    items = parse_packagekit_packages(output, source)
+    for item in items:
+        item["description"] = item.get("description") or "Update available"
+    return items
+
+
+def list_packagekit_installed(source: str) -> list[dict[str, Any]] | None:
+    if not packagekit_available_for_source(source):
+        return None
+    code, output = run_capture(packagekit_command("get-packages", ["installed"]), timeout=90)
+    if code != 0:
+        return None
+    return parse_packagekit_packages(output, source)
+
+
+def search_packagekit_packages(source: str, query: str) -> list[dict[str, Any]] | None:
+    if not packagekit_available_for_source(source):
+        return None
+    code, output = run_capture(packagekit_command("search", ["name", query]), timeout=45)
+    if code not in (0, 1):
+        return None
+    return parse_packagekit_packages(output, source)[:80]
+
+
+def list_packagekit_updates(source: str) -> list[dict[str, Any]] | None:
+    if not packagekit_available_for_source(source):
+        return None
+    code, output = run_capture(packagekit_command("get-updates"), timeout=90)
+    if code not in (0, 1):
+        return None
+    return parse_packagekit_updates(output, source)
+
+
 def parse_apk_search(output: str) -> list[dict[str, Any]]:
     items = []
     for line in output.splitlines():
@@ -1413,16 +1557,25 @@ def search_packages(source: str, query: str) -> list[dict[str, Any]]:
     if len(query) < 2:
         return []
     if source == "apt":
+        items = search_packagekit_packages("apt", query)
+        if items is not None:
+            return items
         require_apt()
         code, output = run_capture(["apt-cache", "search", query], timeout=30)
         return parse_apt_search(output) if code in (0, 1) else []
     if source == "dnf":
+        items = search_packagekit_packages("dnf", query)
+        if items is not None:
+            return items
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
         code, output = run_capture([dnf, "search", query], timeout=30)
         return parse_dnf_search(output) if code in (0, 1) else []
     if source == "zypper":
+        items = search_packagekit_packages("zypper", query)
+        if items is not None:
+            return items
         require_binary("zypper")
         code, output = run_capture(["zypper", "--non-interactive", "search", "-s", query], timeout=30)
         return parse_zypper_search(output) if code in (0, 1) else []
@@ -1559,14 +1712,20 @@ def search_all_packages(query: str, include_non_gui: bool = True) -> list[dict[s
 def install_command(source: str, name: str) -> tuple[str, list[str]]:
     package = validate_package_name(name)
     if source == "apt":
+        if packagekit_available_for_source("apt"):
+            return f"PackageKit installs {package}", packagekit_command("install", [package])
         require_apt()
         return f"APT installs {package}", privileged(["apt-get", "install", "-y", package])
     if source == "dnf":
+        if packagekit_available_for_source("dnf"):
+            return f"PackageKit installs {package}", packagekit_command("install", [package])
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
         return f"dnf installs {package}", privileged([dnf, "install", "-y", package])
     if source == "zypper":
+        if packagekit_available_for_source("zypper"):
+            return f"PackageKit installs {package}", packagekit_command("install", [package])
         require_binary("zypper")
         return f"zypper installs {package}", privileged(["zypper", "--non-interactive", "install", package])
     if source == "pacman":
@@ -1606,14 +1765,20 @@ def install_command(source: str, name: str) -> tuple[str, list[str]]:
 def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
     package = validate_package_name(name)
     if source == "apt":
+        if packagekit_available_for_source("apt"):
+            return f"PackageKit removes {package}", packagekit_command("remove", [package])
         require_apt()
         return f"APT removes {package}", privileged(["apt-get", "purge", "-y", package])
     if source == "dnf":
+        if packagekit_available_for_source("dnf"):
+            return f"PackageKit removes {package}", packagekit_command("remove", [package])
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
         return f"dnf removes {package}", privileged([dnf, "remove", "-y", package])
     if source == "zypper":
+        if packagekit_available_for_source("zypper"):
+            return f"PackageKit removes {package}", packagekit_command("remove", [package])
         require_binary("zypper")
         return f"zypper removes {package}", privileged(["zypper", "--non-interactive", "remove", package])
     if source == "pacman":
@@ -1654,11 +1819,21 @@ def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
 def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
     package = validate_package_name(name) if name else ""
     if source == "apt":
+        if packagekit_available_for_source("apt"):
+            return (
+                f"PackageKit updates {package}" if package else "PackageKit updates packages",
+                packagekit_command("update", [package] if package else None),
+            )
         require_apt()
         if package:
             return f"APT updates {package}", privileged(["apt-get", "install", "--only-upgrade", "-y", package])
         return "APT updates packages", privileged(["sh", "-c", "apt-get update && apt-get upgrade -y"])
     if source == "dnf":
+        if packagekit_available_for_source("dnf"):
+            return (
+                f"PackageKit updates {package}" if package else "PackageKit updates packages",
+                packagekit_command("update", [package] if package else None),
+            )
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
@@ -1666,6 +1841,11 @@ def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
             return f"dnf updates {package}", privileged([dnf, "upgrade", "-y", package])
         return "dnf updates packages", privileged([dnf, "upgrade", "-y"])
     if source == "zypper":
+        if packagekit_available_for_source("zypper"):
+            return (
+                f"PackageKit updates {package}" if package else "PackageKit updates packages",
+                packagekit_command("update", [package] if package else None),
+            )
         require_binary("zypper")
         if package:
             return f"Zypper updates {package}", privileged(["zypper", "--non-interactive", "update", package])
@@ -1729,14 +1909,20 @@ def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
 def refresh_metadata_command(source: str | None = None) -> tuple[str, list[str]]:
     source = source or native_package_source()
     if source == "apt":
+        if packagekit_available_for_source("apt"):
+            return "PackageKit refreshes package databases", packagekit_command("refresh", force_refresh=True)
         require_apt()
         return "APT refreshes package databases", privileged(["apt-get", "update"])
     if source == "dnf":
+        if packagekit_available_for_source("dnf"):
+            return "PackageKit refreshes package databases", packagekit_command("refresh", force_refresh=True)
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
         return "dnf refreshes package databases", privileged([dnf, "makecache", "-y"])
     if source == "zypper":
+        if packagekit_available_for_source("zypper"):
+            return "PackageKit refreshes package databases", packagekit_command("refresh", force_refresh=True)
         require_binary("zypper")
         return "Zypper refreshes package databases", privileged(["zypper", "--non-interactive", "refresh"])
     if source == "pacman":
@@ -1935,16 +2121,25 @@ def parse_pip_updates(output: str) -> list[dict[str, Any]]:
 
 def list_updates(source: str) -> list[dict[str, Any]]:
     if source == "apt":
+        items = list_packagekit_updates("apt")
+        if items is not None:
+            return items
         require_apt()
         code, output = run_capture(["apt", "list", "--upgradable"], timeout=45)
         return parse_apt_updates(output) if code in (0, 1) else []
     if source == "dnf":
+        items = list_packagekit_updates("dnf")
+        if items is not None:
+            return items
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
         code, output = run_capture([dnf, "check-update"], timeout=60)
         return parse_dnf_updates(output) if code in (0, 100) else []
     if source == "zypper":
+        items = list_packagekit_updates("zypper")
+        if items is not None:
+            return items
         require_binary("zypper")
         code, output = run_capture(["zypper", "--non-interactive", "list-updates"], timeout=60)
         return parse_zypper_updates(output) if code in (0, 100) else []
@@ -2397,6 +2592,12 @@ def uninstall_manual(identifier: str) -> dict[str, Any]:
     return entry
 
 
+def source_status(available: bool, detail: str, source: str = "") -> dict[str, Any]:
+    if source and packagekit_available_for_source(source):
+        return {"available": available, "detail": f"{which('pkcon')} preferred; fallback {detail}"}
+    return {"available": available, "detail": detail}
+
+
 def status() -> dict[str, Any]:
     pacman_repos: list[str] = []
     if which("pacman-conf"):
@@ -2414,12 +2615,10 @@ def status() -> dict[str, Any]:
             "desktopFiles": str(APPLICATIONS_DIR),
         },
         "sources": {
-            "apt": {
-                "available": apt_available(),
-                "detail": which("apt-cache") or "apt-cache missing",
-            },
-            "dnf": {"available": bool(dnf_binary()), "detail": dnf_binary() or "dnf missing"},
-            "zypper": {"available": zypper_available(), "detail": which("zypper") or "zypper missing"},
+            "packagekit": {"available": packagekit_available(), "detail": which("pkcon") or "pkcon missing"},
+            "apt": source_status(apt_available(), which("apt-cache") or "apt-cache missing", "apt"),
+            "dnf": source_status(bool(dnf_binary()), dnf_binary() or "dnf missing", "dnf"),
+            "zypper": source_status(zypper_available(), which("zypper") or "zypper missing", "zypper"),
             "pacman": {"available": bool(which("pacman")), "detail": ", ".join(pacman_repos) or "pacman"},
             "aur": {"available": bool(helper), "detail": helper or "yay/paru missing"},
             "apk": {"available": apk_available(), "detail": which("apk") or "apk missing"},

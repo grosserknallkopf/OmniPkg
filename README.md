@@ -38,10 +38,12 @@ current system and only enables the sources that can actually be used.
 
 OmniPkg uses a source only when its tools are installed.
 
-- **APT** on Debian, Ubuntu and compatible systems via `apt-cache`, `apt-get`
-  and `dpkg-query`
-- **DNF** on Fedora, RHEL and compatible systems via `dnf5` or `dnf`
-- **Zypper** on openSUSE and SUSE systems
+- **APT** on Debian, Ubuntu and compatible systems, preferably via PackageKit
+  (`pkcon`) with a fallback to `apt-cache`, `apt-get` and `dpkg-query`
+- **DNF** on Fedora, RHEL and compatible systems, preferably via PackageKit
+  (`pkcon`) with a fallback to `dnf5` or `dnf`
+- **Zypper** on openSUSE and SUSE systems, preferably via PackageKit (`pkcon`)
+  with a fallback to `zypper`
 - **Pacman** for Arch repositories
 - **AUR** via `yay` or `paru`
 - **APK** on Alpine Linux

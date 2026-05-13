@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+import importlib.util
 import json
 import os
 import re
@@ -38,6 +39,7 @@ CONFIG_DIR = DATA_HOME / "omnipkg"
 LEGACY_CONFIG_DIR = DATA_HOME / "arch-software-manager"
 REGISTRY_PATH = CONFIG_DIR / "registry.json"
 LEGACY_REGISTRY_PATH = LEGACY_CONFIG_DIR / "registry.json"
+PREFERENCES_PATH = CONFIG_DIR / "preferences.json"
 APPIMAGE_DIR = Path.home() / ".local" / "opt" / "omnipkg" / "appimages"
 ARCHIVE_DIR = Path.home() / ".local" / "opt" / "omnipkg" / "apps"
 LEGACY_APPIMAGE_DIR = Path.home() / ".local" / "opt" / "arch-software-manager" / "appimages"
@@ -428,6 +430,111 @@ def read_registry() -> dict[str, Any]:
     if not isinstance(data, dict) or not isinstance(data.get("manual"), list):
         return {"manual": []}
     return data
+
+
+def read_preferences() -> dict[str, Any]:
+    if not PREFERENCES_PATH.exists():
+        return {}
+    try:
+        with PREFERENCES_PATH.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_preferences(data: dict[str, Any]) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = PREFERENCES_PATH.with_suffix(".tmp")
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2, sort_keys=True)
+    tmp_path.replace(PREFERENCES_PATH)
+
+
+def frontend_preference() -> str:
+    value = str(read_preferences().get("frontend", "auto")).strip().lower()
+    return value if value in {"auto", "qt", "gtk"} else "auto"
+
+
+def set_frontend_preference(value: str) -> None:
+    value = value.strip().lower()
+    if value not in {"auto", "qt", "gtk"}:
+        raise ApiError("Frontend must be auto, qt or gtk.")
+    data = read_preferences()
+    data["frontend"] = value
+    write_preferences(data)
+
+
+def detected_distro_id() -> str:
+    values: dict[str, str] = {}
+    for path in (Path("/etc/os-release"), Path("/usr/lib/os-release")):
+        if not path.exists():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if "=" not in line or line.startswith("#"):
+                    continue
+                key, value = line.split("=", 1)
+                values[key] = value.strip().strip('"').lower()
+        except OSError:
+            continue
+        break
+    ids = " ".join(value for key, value in values.items() if key in {"ID", "ID_LIKE", "VARIANT_ID", "NAME"})
+    return ids
+
+
+def detected_desktop() -> str:
+    values = (
+        os.environ.get("XDG_CURRENT_DESKTOP", ""),
+        os.environ.get("XDG_SESSION_DESKTOP", ""),
+        os.environ.get("DESKTOP_SESSION", ""),
+    )
+    return " ".join(values).replace(":", " ").lower()
+
+
+def qt_frontend_available() -> bool:
+    return any(importlib.util.find_spec(module) for module in ("PyQt6", "PySide6", "PyQt5", "PySide2"))
+
+
+def gtk_frontend_available() -> bool:
+    if importlib.util.find_spec("gi") is None:
+        return False
+    try:
+        import gi  # type: ignore[import-not-found]
+
+        gi.require_version("Gtk", "4.0")
+        from gi.repository import Gtk  # noqa: F401
+    except (ImportError, ValueError):
+        return False
+    return True
+
+
+def automatic_frontend() -> str:
+    desktop = detected_desktop()
+    distro = detected_distro_id()
+    qt_markers = ("kde", "plasma", "lxqt", "ukui", "kubuntu", "neon", "opensuse", "suse", "manjaro", "chakra")
+    gtk_markers = ("gnome", "cinnamon", "mate", "xfce", "pantheon", "budgie", "ubuntu", "debian", "fedora", "pop", "elementary", "mint")
+    if any(marker in desktop for marker in qt_markers):
+        return "qt"
+    if any(marker in desktop for marker in gtk_markers):
+        return "gtk"
+    if any(marker in distro for marker in qt_markers):
+        return "qt"
+    if any(marker in distro for marker in gtk_markers):
+        return "gtk"
+    return "qt"
+
+
+def resolve_frontend(requested: str | None = None) -> str:
+    preference = (requested or frontend_preference()).strip().lower()
+    frontend = automatic_frontend() if preference == "auto" else preference
+    available = {"qt": qt_frontend_available(), "gtk": gtk_frontend_available()}
+    if available.get(frontend):
+        return frontend
+    fallback = "gtk" if frontend == "qt" else "qt"
+    if available.get(fallback):
+        return fallback
+    raise ApiError("No supported frontend is available. Install Qt/PyQt or GTK/PyGObject.", 404)
 
 
 def write_registry(data: dict[str, Any]) -> None:

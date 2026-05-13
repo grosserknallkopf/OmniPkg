@@ -50,36 +50,44 @@ python_check() {
 import gi
 gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk
+for module in ("PyQt6", "PySide6", "PyQt5", "PySide2"):
+    try:
+        __import__(module)
+        break
+    except ImportError:
+        pass
+else:
+    raise SystemExit(1)
 PY
 }
 
 install_dependencies() {
   if python_check >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
-    printf 'GTK4/PyGObject and git are available.\n'
+    printf 'GTK4, Qt Python bindings and git are available.\n'
     return
   fi
 
   printf 'Installing desktop dependencies for %s...\n' "$APP_NAME"
   if command -v apt-get >/dev/null 2>&1; then
     as_root apt-get update
-    as_root apt-get install -y python3-gi gir1.2-gtk-4.0 desktop-file-utils appstream git
+    as_root apt-get install -y python3-gi gir1.2-gtk-4.0 python3-pyqt5 desktop-file-utils appstream git
   elif command -v dnf5 >/dev/null 2>&1; then
-    as_root dnf5 install -y python3-gobject gtk4 desktop-file-utils appstream git
+    as_root dnf5 install -y python3-gobject gtk4 python3-qt5 desktop-file-utils appstream git
   elif command -v dnf >/dev/null 2>&1; then
-    as_root dnf install -y python3-gobject gtk4 desktop-file-utils appstream git
+    as_root dnf install -y python3-gobject gtk4 python3-qt5 desktop-file-utils appstream git
   elif command -v zypper >/dev/null 2>&1; then
-    as_root zypper --non-interactive install python3-gobject gtk4 desktop-file-utils AppStream git
+    as_root zypper --non-interactive install python3-gobject gtk4 python3-qt5 desktop-file-utils AppStream git
   elif command -v pacman >/dev/null 2>&1; then
-    as_root pacman -Sy --needed --noconfirm python-gobject gtk4 desktop-file-utils appstream git
+    as_root pacman -Sy --needed --noconfirm python-gobject gtk4 python-pyqt5 desktop-file-utils appstream git
   elif command -v apk >/dev/null 2>&1; then
-    as_root apk add python3 py3-gobject3 gtk4.0 desktop-file-utils appstream git
+    as_root apk add python3 py3-gobject3 gtk4.0 py3-qt5 desktop-file-utils appstream git
   elif command -v xbps-install >/dev/null 2>&1; then
-    as_root xbps-install -Sy python3-gobject gtk4 desktop-file-utils AppStream git
+    as_root xbps-install -Sy python3-gobject gtk4 python3-PyQt5 desktop-file-utils AppStream git
   elif command -v eopkg >/dev/null 2>&1; then
-    as_root eopkg -y install python3-gobject gtk-4 desktop-file-utils appstream-glib git
+    as_root eopkg -y install python3-gobject gtk-4 python3-qt5 desktop-file-utils appstream-glib git
   else
     printf 'No supported system package manager was found for automatic dependency installation.\n' >&2
-    printf 'Please install Python 3, PyGObject, GTK4, desktop-file-utils and appstream.\n' >&2
+    printf 'Please install Python 3, PyGObject/GTK4, PyQt/PySide, desktop-file-utils and appstream.\n' >&2
   fi
 }
 

@@ -26,7 +26,9 @@ current system and only enables the sources that can actually be used.
 - Real application names and icons from `.desktop` files, icon themes and
   AppStream metadata
 - German UI when the system locale starts with `de`, English everywhere else
-- Native GTK4 desktop app, no local browser service
+- Native desktop app, no local browser service
+- Automatic GTK/Qt frontend selection based on the current desktop or distro,
+  with a manual frontend preference in the app settings
 - Manual AppImage and archive installation with desktop launcher generation
 - Installer script for app files, launcher setup, optional sudoers setup and a
   background updater
@@ -231,7 +233,8 @@ python3 omnipkg.py
 Run quick checks:
 
 ```bash
+python3 omnipkg_qt.py --check
 python3 omnipkg_desktop.py --check
-python3 -m py_compile omnipkg_core.py omnipkg_desktop.py omnipkg.py
+python3 -m py_compile omnipkg_core.py omnipkg_qt.py omnipkg_desktop.py omnipkg.py
 bash -n install.sh
 ```

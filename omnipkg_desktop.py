@@ -91,6 +91,11 @@ TRANSLATIONS = {
         "entries_count": "{count} of {total} entries",
         "error_details": "Error details",
         "executable_inside_archive": "Executable inside archive",
+        "frontend": "Frontend",
+        "frontend_auto": "Automatic",
+        "frontend_gtk": "GTK",
+        "frontend_qt": "Qt",
+        "frontend_restart": "Frontend preference saved. Restart OmniPkg to apply it.",
         "install": "Install",
         "install_appimage": "Install AppImage",
         "install_archive": "Install archive",
@@ -187,6 +192,11 @@ TRANSLATIONS = {
         "entries_count": "{count} von {total} Einträgen",
         "error_details": "Fehlerdetails",
         "executable_inside_archive": "Programmdatei im Archiv",
+        "frontend": "Frontend",
+        "frontend_auto": "Automatisch",
+        "frontend_gtk": "GTK",
+        "frontend_qt": "Qt",
+        "frontend_restart": "Frontend-Einstellung gespeichert. Starte OmniPkg neu, um sie zu übernehmen.",
         "install": "Installieren",
         "install_appimage": "AppImage installieren",
         "install_archive": "Archiv installieren",
@@ -868,6 +878,18 @@ class MainWindow(Gtk.ApplicationWindow):
         self.language_combo.connect("changed", self.on_language_changed)
         language_box.append(self.language_combo)
 
+        frontend_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        frontend_box.set_valign(Gtk.Align.CENTER)
+        header.append(frontend_box)
+        frontend_box.append(Gtk.Label(label=tr("frontend")))
+        self.frontend_combo = Gtk.ComboBoxText()
+        self.frontend_combo.append("auto", tr("frontend_auto"))
+        self.frontend_combo.append("qt", tr("frontend_qt"))
+        self.frontend_combo.append("gtk", tr("frontend_gtk"))
+        self.frontend_combo.set_active_id(core.frontend_preference())
+        self.frontend_combo.connect("changed", self.on_frontend_changed)
+        frontend_box.append(self.frontend_combo)
+
         tabs = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         tabs.add_css_class("tabs")
         main.append(tabs)
@@ -932,6 +954,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self.render_installed()
         self.set_view(view)
         self.suspend_events = False
+
+    def on_frontend_changed(self, combo: Gtk.ComboBoxText) -> None:
+        if self.suspend_events:
+            return
+        preference = combo.get_active_id() or "auto"
+        if preference == core.frontend_preference():
+            return
+        core.set_frontend_preference(preference)
+        self.log(tr("frontend_restart"))
 
     def make_list_page(self, title: Gtk.Label, list_box: Gtk.ListBox) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)

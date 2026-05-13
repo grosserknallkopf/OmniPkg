@@ -1597,6 +1597,8 @@ def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
         return "Flatpak updates apps", ["flatpak", "update", "-y"]
     if source == "snap":
         require_binary("snap")
+        if package.casefold() == "all":
+            return "Snap refreshes packages", privileged(["snap", "refresh"])
         if package:
             return f"Snap refreshes {package}", privileged(["snap", "refresh", package])
         return "Snap refreshes packages", privileged(["snap", "refresh"])
@@ -1749,10 +1751,16 @@ def parse_snap_updates(output: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for line in output.splitlines():
         text = line.strip()
-        if not text or text.lower().startswith("name "):
+        lower = text.lower()
+        if (
+            not text
+            or lower.startswith("name ")
+            or lower.startswith("all snaps")
+            or lower in {"all snaps up to date.", "all snaps up to date"}
+        ):
             continue
         parts = text.split()
-        if len(parts) >= 2:
+        if len(parts) >= 2 and parts[0].casefold() != "all":
             items.append({"name": parts[0], "packageName": parts[0], "version": parts[1], "description": "Snap refresh available", "source": "snap"})
     return items
 

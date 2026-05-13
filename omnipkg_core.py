@@ -242,6 +242,15 @@ def require_pipx() -> str:
     return require_binary("pipx")
 
 
+def npm_command(args: list[str]) -> list[str]:
+    npm = require_binary("npm")
+    code, output = run_capture([npm, "config", "get", "prefix"], timeout=10)
+    prefix = output.strip() if code == 0 else ""
+    if prefix.startswith(str(Path.home())):
+        return [npm, *args]
+    return privileged([npm, *args])
+
+
 def apt_available() -> bool:
     return bool(which("apt-cache") and which("apt-get") and which("dpkg-query"))
 
@@ -1454,8 +1463,7 @@ def install_command(source: str, name: str) -> tuple[str, list[str]]:
         require_binary("brew")
         return f"Homebrew installs {package}", ["brew", "install", package]
     if source == "npm":
-        require_binary("npm")
-        return f"npm installs {package}", ["npm", "install", "-g", package]
+        return f"npm installs {package}", npm_command(["install", "-g", package])
     if source == "pip":
         require_pipx()
         return f"pipx installs {package}", ["pipx", "install", package]
@@ -1503,8 +1511,7 @@ def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
         require_binary("brew")
         return f"Homebrew removes {package}", ["brew", "uninstall", package]
     if source == "npm":
-        require_binary("npm")
-        return f"npm removes {package}", ["npm", "uninstall", "-g", package]
+        return f"npm removes {package}", npm_command(["uninstall", "-g", package])
     if source == "pip":
         require_pipx()
         return f"pipx removes {package}", ["pipx", "uninstall", package]
@@ -1573,10 +1580,9 @@ def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
             return f"Homebrew updates {package}", ["brew", "upgrade", package]
         return "Homebrew updates packages", ["brew", "upgrade"]
     if source == "npm":
-        require_binary("npm")
         if package:
-            return f"npm updates {package}", ["npm", "update", "-g", package]
-        return "npm updates global packages", ["npm", "update", "-g"]
+            return f"npm updates {package}", npm_command(["update", "-g", package])
+        return "npm updates global packages", npm_command(["update", "-g"])
     if source == "pip":
         require_pipx()
         if package:

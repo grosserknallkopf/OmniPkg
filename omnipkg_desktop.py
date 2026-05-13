@@ -98,7 +98,8 @@ TRANSLATIONS = {
         "install_manager_failed": "Package manager installation failed: {error}",
         "install_manager_started": "Installing package manager: {name}",
         "install_missing_manager_prompt": "{name} is not installed. Install it now?",
-        "install_missing_manager_chip": "{name}: install",
+        "install_missing_manager_chip": "{name}: missing. install?",
+        "installing_manager_chip": "{name}: installing...",
         "installing_now": "Installing...",
         "installed": "Installed",
         "installed_load_failed": "Installed packages could not be loaded.",
@@ -192,8 +193,9 @@ TRANSLATIONS = {
         "install_manager_failed": "Paketmanager-Installation fehlgeschlagen: {error}",
         "install_manager_started": "Paketmanager wird installiert: {name}",
         "install_missing_manager_prompt": "{name} ist nicht installiert. Jetzt installieren?",
-        "install_missing_manager_chip": "{name}: installieren",
-        "installing_now": "Wird installiert",
+        "install_missing_manager_chip": "{name}: fehlt. installieren?",
+        "installing_manager_chip": "{name}: wird installiert...",
+        "installing_now": "Wird installiert...",
         "installed": "Installiert",
         "installed_load_failed": "Installierte Pakete konnten nicht geladen werden.",
         "installed_load_failed_log": "Installierte Pakete konnten nicht geladen werden: {error}",
@@ -782,9 +784,11 @@ class MainWindow(Gtk.ApplicationWindow):
         self.pending_actions: dict[tuple[str, str], str] = {}
         self.pending_update_packages: dict[tuple[str, str], str] = {}
         self.pending_update_sources: set[str] = set()
+        self.refreshing_metadata_sources: set[str] = set()
         self.pending_manager_installs: set[str] = set()
         self.update_queue: list[dict[str, Any]] = []
         self.update_source_queue: list[str] = []
+        self.batch_update_sources: set[str] = set()
         self.batch_update_errors: list[str] = []
         self.log_lines: list[str] = []
         self.search_token = 0
@@ -1109,11 +1113,18 @@ class MainWindow(Gtk.ApplicationWindow):
         run_in_thread(core.status, done)
 
     def refresh_package_databases(self) -> None:
+        source = core.native_package_source()
         try:
-            label, command = core.refresh_metadata_command()
+            self.refreshing_metadata_sources.add(source)
+            self.pending_update_sources.add(source)
+            self.render_updates()
+            label, command = core.refresh_metadata_command(source)
             job = core.start_job(label, command)
-            self.watch_job(job.id, refresh_status_after=True, show_failure_dialog=False)
+            self.watch_job(job.id, update_source=source, refresh_status_after=True, show_failure_dialog=False)
         except Exception as exc:  # noqa: BLE001 - best-effort background task
+            self.pending_update_sources.discard(source)
+            self.refreshing_metadata_sources.discard(source)
+            self.render_updates()
             self.log(str(exc))
 
     def render_source_chips(self) -> None:
@@ -1124,7 +1135,9 @@ class MainWindow(Gtk.ApplicationWindow):
         for source_id, label in SOURCES:
             meta = sources.get(source_id, {})
             chip_text = f"{label}: {tr('ready') if meta.get('available') else tr('missing')}"
-            if not meta.get("available") and source_id in installable_managers:
+            if source_id in self.pending_manager_installs and source_id in installable_managers:
+                chip = Gtk.Label(label=tr("installing_manager_chip", name=installable_managers[source_id]))
+            elif not meta.get("available") and source_id in installable_managers:
                 manager_name = installable_managers[source_id]
                 chip = Gtk.Button(label=tr("install_missing_manager_chip", name=manager_name))
                 chip.set_tooltip_text(tr("install_missing_manager_prompt", name=manager_name))
@@ -1242,6 +1255,16 @@ class MainWindow(Gtk.ApplicationWindow):
                 or query in str(item.get("source", "")).lower()
                 or query in str(item.get("packageName", "")).lower()
             ]
+        active_batch_sources = (self.batch_update_sources & self.pending_update_sources) - self.refreshing_metadata_sources
+        if active_batch_sources:
+            items = sorted(
+                items,
+                key=lambda item: (
+                    0 if str(item.get("source", "")) in active_batch_sources else 1,
+                    str(item.get("source", "")),
+                    str(item.get("name", "")).lower(),
+                ),
+            )
         return items
 
     def render_updates(self) -> None:
@@ -1304,7 +1327,7 @@ class MainWindow(Gtk.ApplicationWindow):
         package_key = self.package_key(item)
         self.pending_update_packages[package_key] = "update"
         if row:
-            row.set_busy(tr("update"))
+            row.set_busy(tr("updating_now"))
         source = str(item.get("source", ""))
         name = str(item.get("packageName") or item.get("id") or item.get("name") or "")
         try:
@@ -1324,12 +1347,16 @@ class MainWindow(Gtk.ApplicationWindow):
     def update_all_sources(self) -> None:
         sources = self.status_data.get("sources", {}) if self.status_data else {}
         queued: list[str] = []
+        queued_sources = set(self.update_source_queue)
         for source, _label in SOURCES:
             if source in {"manual", "desktop"}:
                 continue
-            if sources.get(source, {}).get("available") and source not in self.pending_update_sources:
+            already_running = source in self.pending_update_sources and source not in self.refreshing_metadata_sources
+            if sources.get(source, {}).get("available") and source not in queued_sources and not already_running:
                 queued.append(source)
+                queued_sources.add(source)
         self.batch_update_errors = []
+        self.batch_update_sources = set(queued)
         self.update_source_queue.extend(queued)
         self.render_updates()
         self.start_next_queued_update_source()
@@ -1362,6 +1389,8 @@ class MainWindow(Gtk.ApplicationWindow):
             self.watch_job(job.id, update_source=source, continue_update_queue=continue_queue, show_failure_dialog=not continue_queue)
         except Exception as exc:  # noqa: BLE001 - UI boundary
             self.pending_update_sources.discard(source)
+            self.batch_update_sources.discard(source)
+            self.render_updates()
             self.log(tr("update_failed", error=exc))
             self.show_error_details(tr("update_failed", error=exc), str(exc))
             if continue_queue:
@@ -1422,6 +1451,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def install_manager_tool(self, tool_id: str, name: str, row: ActionRow | None = None) -> None:
         self.pending_manager_installs.add(tool_id)
+        self.render_source_chips()
         if row:
             row.set_busy(tr("installing_now"))
         try:
@@ -1431,6 +1461,7 @@ class MainWindow(Gtk.ApplicationWindow):
             self.watch_job(job.id, manager_tool=tool_id)
         except Exception as exc:  # noqa: BLE001 - UI boundary
             self.pending_manager_installs.discard(tool_id)
+            self.render_source_chips()
             if row:
                 row.clear_busy()
             self.log(tr("install_manager_failed", error=exc))
@@ -1514,10 +1545,15 @@ class MainWindow(Gtk.ApplicationWindow):
                     self.pending_update_packages.pop(update_package, None)
                     self.render_updates()
                 if update_source:
+                    metadata_refresh = update_source in self.refreshing_metadata_sources
                     self.pending_update_sources.discard(update_source)
+                    self.refreshing_metadata_sources.discard(update_source)
+                    if not metadata_refresh:
+                        self.batch_update_sources.discard(update_source)
                     self.render_updates()
                 if manager_tool:
                     self.pending_manager_installs.discard(manager_tool)
+                    self.render_source_chips()
                     self.refresh_status()
                 if refresh_status_after:
                     self.refresh_status()

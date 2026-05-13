@@ -218,7 +218,7 @@ configure_sudoers() {
 
   local target_user="${SUDO_USER:-$USER}"
   local commands=()
-  for binary in apt-get dnf5 dnf zypper pacman apk xbps-install xbps-remove eopkg snap flatpak; do
+  for binary in apt-get dnf5 dnf zypper pacman apk xbps-install xbps-remove eopkg snap flatpak npm; do
     if command -v "$binary" >/dev/null 2>&1; then
       commands+=("$(command -v "$binary")")
     fi

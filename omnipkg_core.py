@@ -12,6 +12,7 @@ import configparser
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -61,6 +62,47 @@ SOURCE_ORDER = (
     "pip",
     "manual",
     "desktop",
+)
+SYSTEM_SOURCE_ORDER = (
+    "apt",
+    "dnf",
+    "zypper",
+    "pacman",
+    "apk",
+    "xbps",
+    "eopkg",
+)
+PACKAGE_MANAGER_TOOLS = (
+    {
+        "id": "brew",
+        "name": "Homebrew",
+        "description": "User-level package manager for CLI tools and developer apps.",
+        "binary": "brew",
+    },
+    {
+        "id": "npm",
+        "name": "npm",
+        "description": "JavaScript package manager, installed together with Node.js.",
+        "binary": "npm",
+    },
+    {
+        "id": "pip",
+        "name": "pipx",
+        "description": "Isolated Python application installer for PyPI tools.",
+        "binary": "pipx",
+    },
+    {
+        "id": "flatpak",
+        "name": "Flatpak",
+        "description": "Desktop app package manager with Flathub support.",
+        "binary": "flatpak",
+    },
+    {
+        "id": "snap",
+        "name": "Snap",
+        "description": "Cross-distro package manager from Canonical.",
+        "binary": "snap",
+    },
 )
 DESKTOP_DIRS = (
     Path("/usr/share/applications"),
@@ -196,6 +238,10 @@ def require_python_pip() -> str:
     return python
 
 
+def require_pipx() -> str:
+    return require_binary("pipx")
+
+
 def apt_available() -> bool:
     return bool(which("apt-cache") and which("apt-get") and which("dpkg-query"))
 
@@ -241,6 +287,71 @@ def native_package_source() -> str:
     if eopkg_available():
         return "eopkg"
     return ""
+
+
+def os_release_codename() -> str:
+    for path in (Path("/etc/os-release"), Path("/usr/lib/os-release")):
+        if not path.exists():
+            continue
+        values: dict[str, str] = {}
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if "=" not in line or line.startswith("#"):
+                    continue
+                key, value = line.split("=", 1)
+                values[key] = value.strip().strip('"')
+        except OSError:
+            continue
+        return values.get("VERSION_CODENAME") or values.get("UBUNTU_CODENAME") or ""
+    return ""
+
+
+def validate_source_name(name: str) -> str:
+    name = slugify(name)
+    if not re.match(r"^[A-Za-z0-9._-]+$", name):
+        raise ApiError("Invalid source name.")
+    return name
+
+
+def validate_source_url(url: str) -> str:
+    url = url.strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https", "ftp", "file"}:
+        raise ApiError("Repository URL must start with http://, https://, ftp:// or file://.")
+    if parsed.scheme != "file" and not parsed.netloc:
+        raise ApiError("Repository URL is incomplete.")
+    return url
+
+
+def native_install_command(packages: dict[str, list[str]], label: str) -> tuple[str, list[str]]:
+    source = native_package_source()
+    names = packages.get(source)
+    if not source or not names:
+        raise ApiError("No supported system package manager was found for this installer.", 404)
+    if source == "apt":
+        require_apt()
+        return label, privileged(["apt-get", "install", "-y", *names])
+    if source == "dnf":
+        dnf = dnf_binary()
+        if not dnf:
+            raise ApiError("dnf is not installed or not in PATH.", 404)
+        return label, privileged([dnf, "install", "-y", *names])
+    if source == "zypper":
+        require_binary("zypper")
+        return label, privileged(["zypper", "--non-interactive", "install", *names])
+    if source == "pacman":
+        require_binary("pacman")
+        return label, privileged(["pacman", "-S", "--needed", "--noconfirm", *names])
+    if source == "apk":
+        require_binary("apk")
+        return label, privileged(["apk", "add", *names])
+    if source == "xbps":
+        require_binary("xbps-install")
+        return label, privileged(["xbps-install", "-Sy", *names])
+    if source == "eopkg":
+        require_binary("eopkg")
+        return label, privileged(["eopkg", "-y", "install", *names])
+    raise ApiError("No supported system package manager was found for this installer.", 404)
 
 
 def validate_package_name(name: str) -> str:
@@ -444,13 +555,13 @@ def package_owners(paths: list[str], source: str) -> dict[str, str]:
         return {}
     owners: dict[str, str] = {}
     if source in {"pacman", "aur"} and which("pacman"):
-        code, output = run_capture(["pacman", "-Qo", *paths], timeout=45)
-        if code == 127:
-            return owners
-        for line in output.splitlines():
-            match = re.match(r"^(.+) is owned by (\S+) ", line)
-            if match:
-                owners[match.group(1)] = match.group(2)
+        # Use pacman's quiet query to avoid locale-dependent output parsing.
+        for path in paths:
+            code, output = run_capture(["pacman", "-Qoq", path], timeout=10)
+            if code == 0:
+                package = output.splitlines()[0].strip()
+                if package:
+                    owners[path] = package
         return owners
     if source in {"dnf", "zypper"} and which("rpm"):
         for path in paths:
@@ -572,18 +683,33 @@ def find_theme_icon(icon: str) -> str:
 def enrich_item(item: dict[str, Any], desktop_index: dict[tuple[str, str], dict[str, Any]] | None = None) -> dict[str, Any]:
     desktop_index = desktop_index if desktop_index is not None else desktop_package_index()
     source = str(item.get("source", ""))
-    keys = [str(item.get("name", "")), str(item.get("id", ""))]
+    package_name = str(item.get("packageName") or item.get("id") or item.get("name") or "")
+    keys = [package_name, str(item.get("id", "")), str(item.get("name", ""))]
     desktop = next((desktop_index.get((source, key)) for key in keys if key), None)
+    if not desktop:
+        key_set = {key.casefold() for key in keys if key}
+        for (entry_source, entry_key), entry in desktop_index.items():
+            if entry_source != source:
+                continue
+            if str(entry_key).casefold() in key_set:
+                desktop = entry
+                break
     enriched = dict(item)
     if desktop:
-        enriched["packageName"] = item.get("name") or item.get("id")
+        resolved_package = str(item.get("packageName") or desktop.get("package") or item.get("id") or item.get("name") or "")
+        if resolved_package:
+            enriched["packageName"] = resolved_package
         enriched["name"] = desktop.get("name") or enriched.get("name")
         enriched["description"] = desktop.get("description") or enriched.get("description", "")
-        enriched["icon"] = find_theme_icon(str(desktop.get("icon", ""))) or desktop.get("icon", "")
+        desktop_icon = str(desktop.get("icon", ""))
+        enriched["icon"] = find_theme_icon(desktop_icon) or find_appstream_icon(desktop_icon) or desktop_icon
         enriched["desktopId"] = desktop.get("desktopId")
         enriched["desktopPath"] = desktop.get("desktopPath")
         enriched["gui"] = True
     else:
+        icon = str(enriched.get("icon", ""))
+        if icon:
+            enriched["icon"] = find_theme_icon(icon) or icon
         enriched.setdefault("gui", False)
     return enriched
 
@@ -795,21 +921,32 @@ def list_npm_installed() -> list[dict[str, Any]]:
 
 
 def list_pip_installed() -> list[dict[str, Any]]:
-    python = python_executable()
-    if not python:
+    if not which("pipx"):
         return []
-    code, output = run_capture([python, "-m", "pip", "list", "--user", "--format=json"], timeout=30)
+    code, output = run_capture(["pipx", "list", "--json"], timeout=30)
     if code != 0:
         return []
     try:
         data = json.loads(output)
     except json.JSONDecodeError:
         return []
-    return [
-        {"name": item.get("name", ""), "version": item.get("version", ""), "source": "pip"}
-        for item in data
-        if isinstance(item, dict) and item.get("name")
-    ]
+    items: list[dict[str, Any]] = []
+    venvs = data.get("venvs", {}) if isinstance(data, dict) else {}
+    for name, meta in sorted(venvs.items()):
+        if not isinstance(meta, dict):
+            continue
+        package = meta.get("metadata", {}).get("main_package", {})
+        package_name = package.get("package") or name
+        items.append(
+            {
+                "name": package_name,
+                "packageName": package_name,
+                "version": package.get("package_version", ""),
+                "source": "pip",
+                "description": "Installed with pipx",
+            }
+        )
+    return items
 
 
 def list_manual_installed() -> list[dict[str, Any]]:
@@ -1320,8 +1457,8 @@ def install_command(source: str, name: str) -> tuple[str, list[str]]:
         require_binary("npm")
         return f"npm installs {package}", ["npm", "install", "-g", package]
     if source == "pip":
-        python = require_python_pip()
-        return f"pip installs {package}", [python, "-m", "pip", "install", "--user", package]
+        require_pipx()
+        return f"pipx installs {package}", ["pipx", "install", package]
     raise ApiError("Unknown source.", 404)
 
 
@@ -1369,9 +1506,522 @@ def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
         require_binary("npm")
         return f"npm removes {package}", ["npm", "uninstall", "-g", package]
     if source == "pip":
-        python = require_python_pip()
-        return f"pip removes {package}", [python, "-m", "pip", "uninstall", "-y", package]
+        require_pipx()
+        return f"pipx removes {package}", ["pipx", "uninstall", package]
     raise ApiError("Unknown source.", 404)
+
+
+def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
+    package = validate_package_name(name) if name else ""
+    if source == "apt":
+        require_apt()
+        if package:
+            return f"APT updates {package}", privileged(["apt-get", "install", "--only-upgrade", "-y", package])
+        return "APT updates packages", privileged(["sh", "-c", "apt-get update && apt-get upgrade -y"])
+    if source == "dnf":
+        dnf = dnf_binary()
+        if not dnf:
+            raise ApiError("dnf is not installed or not in PATH.", 404)
+        if package:
+            return f"dnf updates {package}", privileged([dnf, "upgrade", "-y", package])
+        return "dnf updates packages", privileged([dnf, "upgrade", "-y"])
+    if source == "zypper":
+        require_binary("zypper")
+        if package:
+            return f"Zypper updates {package}", privileged(["zypper", "--non-interactive", "update", package])
+        return "Zypper updates packages", privileged(["zypper", "--non-interactive", "update"])
+    if source == "pacman":
+        require_binary("pacman")
+        if package:
+            return f"Pacman updates {package}", privileged(["pacman", "-S", "--needed", "--noconfirm", package])
+        return "Pacman updates packages", privileged(["pacman", "-Syu", "--noconfirm"])
+    if source == "aur":
+        helper = aur_helper()
+        if not helper:
+            raise ApiError("Install yay or paru to update AUR packages.", 404)
+        if package:
+            return f"AUR updates {package}", [helper, "-S", "--needed", "--noconfirm", *aur_sudo_options(), package]
+        return "AUR updates packages", [helper, "-Sua", "--noconfirm", *aur_sudo_options()]
+    if source == "apk":
+        require_binary("apk")
+        if package:
+            return f"apk updates {package}", privileged(["apk", "upgrade", package])
+        return "apk updates packages", privileged(["sh", "-c", "apk update && apk upgrade"])
+    if source == "xbps":
+        require_binary("xbps-install")
+        if package:
+            return f"XBPS updates {package}", privileged(["xbps-install", "-Su", package])
+        return "XBPS updates packages", privileged(["xbps-install", "-Syu"])
+    if source == "eopkg":
+        require_binary("eopkg")
+        if package:
+            return f"eopkg updates {package}", privileged(["eopkg", "-y", "upgrade", package])
+        return "eopkg updates packages", privileged(["eopkg", "-y", "upgrade"])
+    if source == "flatpak":
+        require_binary("flatpak")
+        if package:
+            return f"Flatpak updates {package}", ["flatpak", "update", "-y", package]
+        return "Flatpak updates apps", ["flatpak", "update", "-y"]
+    if source == "snap":
+        require_binary("snap")
+        if package:
+            return f"Snap refreshes {package}", privileged(["snap", "refresh", package])
+        return "Snap refreshes packages", privileged(["snap", "refresh"])
+    if source == "brew":
+        require_binary("brew")
+        if package:
+            return f"Homebrew updates {package}", ["brew", "upgrade", package]
+        return "Homebrew updates packages", ["brew", "upgrade"]
+    if source == "npm":
+        require_binary("npm")
+        if package:
+            return f"npm updates {package}", ["npm", "update", "-g", package]
+        return "npm updates global packages", ["npm", "update", "-g"]
+    if source == "pip":
+        require_pipx()
+        if package:
+            return f"pipx updates {package}", ["pipx", "upgrade", package]
+        return "pipx updates Python apps", ["pipx", "upgrade-all"]
+    raise ApiError("Unknown source.", 404)
+
+
+def refresh_metadata_command(source: str | None = None) -> tuple[str, list[str]]:
+    source = source or native_package_source()
+    if source == "apt":
+        require_apt()
+        return "APT refreshes package databases", privileged(["apt-get", "update"])
+    if source == "dnf":
+        dnf = dnf_binary()
+        if not dnf:
+            raise ApiError("dnf is not installed or not in PATH.", 404)
+        return "dnf refreshes package databases", privileged([dnf, "makecache", "-y"])
+    if source == "zypper":
+        require_binary("zypper")
+        return "Zypper refreshes package databases", privileged(["zypper", "--non-interactive", "refresh"])
+    if source == "pacman":
+        require_binary("pacman")
+        return "Pacman refreshes package databases", privileged(["pacman", "-Sy", "--noconfirm"])
+    if source == "apk":
+        require_binary("apk")
+        return "apk refreshes package databases", privileged(["apk", "update"])
+    if source == "xbps":
+        require_binary("xbps-install")
+        return "XBPS refreshes package databases", privileged(["xbps-install", "-S"])
+    if source == "eopkg":
+        require_binary("eopkg")
+        return "eopkg refreshes package databases", privileged(["eopkg", "update-repo"])
+    raise ApiError("No supported system package manager was found for package database refresh.", 404)
+
+
+def refresh_system_databases() -> tuple[int, str]:
+    label, command = refresh_metadata_command()
+    code, output = run_capture(command, timeout=300)
+    return code, f"{label}\n{output}".strip()
+
+
+def parse_apt_updates(output: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        if "/" not in line or "[upgradable from:" not in line:
+            continue
+        name = line.split("/", 1)[0].strip()
+        match = re.search(r"\s(\S+)\s+\S+\s+\[upgradable from:\s*([^\]]+)\]", line)
+        if name:
+            items.append(
+                {
+                    "name": name,
+                    "packageName": name,
+                    "version": match.group(1) if match else "",
+                    "installedVersion": match.group(2) if match else "",
+                    "description": "Update available",
+                    "source": "apt",
+                }
+            )
+    return items
+
+
+def parse_dnf_updates(output: str, source: str = "dnf") -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        text = line.strip()
+        if not text or text.startswith(("Last metadata", "Obsoleting", "Security:", "Name ")):
+            continue
+        parts = text.split()
+        if len(parts) < 2 or "." not in parts[0]:
+            continue
+        name = parts[0].rsplit(".", 1)[0]
+        items.append({"name": name, "packageName": name, "version": parts[1], "description": "Update available", "source": source})
+    return items
+
+
+def parse_zypper_updates(output: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        if "|" not in line:
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) < 5 or parts[0].lower() not in {"v", "package"}:
+            continue
+        name = parts[2] if parts[0].lower() == "v" else parts[1]
+        if name and name.lower() != "name":
+            items.append({"name": name, "packageName": name, "version": parts[4], "installedVersion": parts[3], "description": "Update available", "source": "zypper"})
+    return items
+
+
+def parse_arrow_updates(output: str, source: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        match = re.match(r"^(\S+)\s+(.+?)\s+->\s+(.+)$", line.strip())
+        if match:
+            name, old_version, new_version = match.groups()
+            items.append(
+                {
+                    "name": name,
+                    "packageName": name,
+                    "version": new_version.strip(),
+                    "installedVersion": old_version.strip(),
+                    "description": "Update available",
+                    "source": source,
+                }
+            )
+    return items
+
+
+def parse_simple_update_lines(output: str, source: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        text = line.strip()
+        if not text or text.lower().startswith(("name", "there are no", "no packages")):
+            continue
+        name = text.split()[0]
+        name = re.sub(r"-[0-9][^-]*$", "", name)
+        if name:
+            items.append({"name": name, "packageName": name, "description": text, "source": source})
+    return items
+
+
+def parse_flatpak_updates(output: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        parts = line.split("\t")
+        app_id = parts[0].strip() if parts else ""
+        if not app_id:
+            continue
+        name = parts[1].strip() if len(parts) > 1 and parts[1].strip() else app_id
+        version = parts[2].strip() if len(parts) > 2 else ""
+        items.append({"id": app_id, "name": name, "packageName": app_id, "version": version, "description": "Flatpak update available", "source": "flatpak", "gui": True})
+    return items
+
+
+def parse_snap_updates(output: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for line in output.splitlines():
+        text = line.strip()
+        if not text or text.lower().startswith("name "):
+            continue
+        parts = text.split()
+        if len(parts) >= 2:
+            items.append({"name": parts[0], "packageName": parts[0], "version": parts[1], "description": "Snap refresh available", "source": "snap"})
+    return items
+
+
+def parse_brew_updates(output: str) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(output or "{}")
+    except json.JSONDecodeError:
+        return parse_simple_update_lines(output, "brew")
+    items: list[dict[str, Any]] = []
+    for item in data.get("formulae", []):
+        name = item.get("name", "")
+        versions = item.get("installed_versions") or []
+        current = versions[0] if versions else ""
+        items.append({"name": name, "packageName": name, "version": item.get("current_version", ""), "installedVersion": current, "description": "Homebrew update available", "source": "brew"})
+    for item in data.get("casks", []):
+        name = item.get("name", "")
+        items.append({"name": name, "packageName": name, "version": item.get("current_version", ""), "installedVersion": item.get("installed_versions", ""), "description": "Homebrew cask update available", "source": "brew"})
+    return [item for item in items if item.get("name")]
+
+
+def parse_npm_updates(output: str) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(output or "{}")
+    except json.JSONDecodeError:
+        return []
+    items: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        for name, meta in data.items():
+            if isinstance(meta, dict):
+                items.append(
+                    {
+                        "name": name,
+                        "packageName": name,
+                        "version": meta.get("latest") or meta.get("wanted") or "",
+                        "installedVersion": meta.get("current", ""),
+                        "description": "npm global update available",
+                        "source": "npm",
+                    }
+                )
+    return items
+
+
+def parse_pip_updates(output: str) -> list[dict[str, Any]]:
+    try:
+        data = json.loads(output or "[]")
+    except json.JSONDecodeError:
+        return []
+    items: list[dict[str, Any]] = []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and item.get("name"):
+                items.append(
+                    {
+                        "name": item.get("name", ""),
+                        "packageName": item.get("name", ""),
+                        "version": item.get("latest_version", ""),
+                        "installedVersion": item.get("version", ""),
+                        "description": "Python package update available",
+                        "source": "pip",
+                    }
+                )
+    return items
+
+
+def list_updates(source: str) -> list[dict[str, Any]]:
+    if source == "apt":
+        require_apt()
+        code, output = run_capture(["apt", "list", "--upgradable"], timeout=45)
+        return parse_apt_updates(output) if code in (0, 1) else []
+    if source == "dnf":
+        dnf = dnf_binary()
+        if not dnf:
+            raise ApiError("dnf is not installed or not in PATH.", 404)
+        code, output = run_capture([dnf, "check-update"], timeout=60)
+        return parse_dnf_updates(output) if code in (0, 100) else []
+    if source == "zypper":
+        require_binary("zypper")
+        code, output = run_capture(["zypper", "--non-interactive", "list-updates"], timeout=60)
+        return parse_zypper_updates(output) if code in (0, 100) else []
+    if source == "pacman":
+        require_binary("pacman")
+        code, output = run_capture(["pacman", "-Qu"], timeout=45)
+        return parse_arrow_updates(output, "pacman") if code in (0, 1) else []
+    if source == "aur":
+        helper = aur_helper()
+        if not helper:
+            raise ApiError("Install yay or paru to check AUR updates.", 404)
+        code, output = run_capture([helper, "-Qua"], timeout=60)
+        return parse_arrow_updates(output, "aur") if code in (0, 1) else []
+    if source == "apk":
+        require_binary("apk")
+        code, output = run_capture(["apk", "version", "-l", "<"], timeout=45)
+        return parse_simple_update_lines(output, "apk") if code in (0, 1) else []
+    if source == "xbps":
+        require_binary("xbps-install")
+        code, output = run_capture(["xbps-install", "-Mun"], timeout=60)
+        return parse_simple_update_lines(output, "xbps") if code in (0, 1) else []
+    if source == "eopkg":
+        require_binary("eopkg")
+        code, output = run_capture(["eopkg", "list-upgrades"], timeout=60)
+        return parse_simple_update_lines(output, "eopkg") if code in (0, 1) else []
+    if source == "flatpak":
+        require_binary("flatpak")
+        code, output = run_capture(["flatpak", "remote-ls", "--updates", "--columns=application,name,version"], timeout=60)
+        return parse_flatpak_updates(output) if code in (0, 1) else []
+    if source == "snap":
+        require_binary("snap")
+        code, output = run_capture(["snap", "refresh", "--list"], timeout=45)
+        return parse_snap_updates(output) if code in (0, 1) else []
+    if source == "brew":
+        require_binary("brew")
+        code, output = run_capture(["brew", "outdated", "--json=v2"], timeout=60)
+        return parse_brew_updates(output) if code in (0, 1) else []
+    if source == "npm":
+        require_binary("npm")
+        code, output = run_capture(["npm", "outdated", "-g", "--json"], timeout=60)
+        return parse_npm_updates(output) if code in (0, 1) else []
+    if source == "pip":
+        if not which("pipx"):
+            raise ApiError("pipx is not installed or not in PATH.", 404)
+        return []
+    raise ApiError("Unknown source.", 404)
+
+
+def list_all_updates(include_non_gui: bool = True) -> list[dict[str, Any]]:
+    desktop_index = desktop_package_index()
+    items: list[dict[str, Any]] = []
+    for source in SOURCE_ORDER:
+        if source in {"manual", "desktop"}:
+            continue
+        try:
+            updates = list_updates(source)
+        except ApiError:
+            continue
+        for item in updates:
+            enriched = enrich_item(item, desktop_index)
+            if include_non_gui or enriched.get("gui"):
+                items.append(enriched)
+    return sorted(items, key=lambda item: (SOURCE_ORDER.index(item.get("source")) if item.get("source") in SOURCE_ORDER else 99, str(item.get("name", "")).lower()))
+
+
+def add_package_source_command(payload: dict[str, Any]) -> tuple[str, list[str]]:
+    source = str(payload.get("manager") or native_package_source()).strip()
+    if source not in SYSTEM_SOURCE_ORDER:
+        raise ApiError("Only system package managers can receive repository sources.")
+    name = validate_source_name(str(payload.get("name", "")))
+    url = validate_source_url(str(payload.get("url", "")))
+    key_url = str(payload.get("keyUrl", "")).strip()
+    if key_url:
+        key_url = validate_source_url(key_url)
+    distro = str(payload.get("distribution", "")).strip() or os_release_codename()
+    components = str(payload.get("components", "")).strip() or "main"
+
+    quoted_name = shlex.quote(name)
+    quoted_url = shlex.quote(url)
+    quoted_key_url = shlex.quote(key_url)
+
+    if source == "apt":
+        require_apt()
+        key_option = ""
+        script_lines = ["set -e", "install -d -m 0755 /etc/apt/sources.list.d"]
+        if key_url:
+            require_binary("curl")
+            require_binary("gpg")
+            keyring = f"/etc/apt/keyrings/{name}.gpg"
+            key_option = f" [signed-by={keyring}]"
+            script_lines.append("install -d -m 0755 /etc/apt/keyrings")
+            script_lines.append(f"curl -fsSL {quoted_key_url} | gpg --dearmor -o {shlex.quote(keyring)}")
+        if not distro:
+            raise ApiError("APT repositories need a distribution/codename.")
+        source_line = f"deb{key_option} {url} {distro} {components}"
+        script_lines.append(f"printf '%s\\n' {shlex.quote(source_line)} > /etc/apt/sources.list.d/{quoted_name}.list")
+        script_lines.append("apt-get update")
+        return f"APT adds source {name}", privileged(["sh", "-c", "\n".join(script_lines)])
+
+    if source == "dnf":
+        dnf = dnf_binary()
+        if not dnf:
+            raise ApiError("dnf is not installed or not in PATH.", 404)
+        repo_text = f"[{name}]\nname={name}\nbaseurl={url}\nenabled=1\ngpgcheck={'1' if key_url else '0'}\n"
+        if key_url:
+            repo_text += f"gpgkey={key_url}\n"
+        script = (
+            "set -e\n"
+            "install -d -m 0755 /etc/yum.repos.d\n"
+            f"printf '%s' {shlex.quote(repo_text)} > /etc/yum.repos.d/{quoted_name}.repo\n"
+            f"{shlex.quote(dnf)} makecache -y"
+        )
+        return f"dnf adds source {name}", privileged(["sh", "-c", script])
+
+    if source == "zypper":
+        require_binary("zypper")
+        script = f"set -e\nzypper --non-interactive addrepo -f {quoted_url} {quoted_name}\nzypper --non-interactive refresh"
+        return f"Zypper adds source {name}", privileged(["sh", "-c", script])
+
+    if source == "pacman":
+        require_binary("pacman")
+        source_block = f"\n[{name}]\nServer = {url}\n"
+        script = (
+            "set -e\n"
+            f"grep -qxF {shlex.quote(f'[{name}]')} /etc/pacman.conf || printf '%s' {shlex.quote(source_block)} >> /etc/pacman.conf\n"
+            "pacman -Sy --noconfirm"
+        )
+        return f"Pacman adds source {name}", privileged(["sh", "-c", script])
+
+    if source == "apk":
+        require_binary("apk")
+        script = f"set -e\ngrep -qxF {quoted_url} /etc/apk/repositories || printf '%s\\n' {quoted_url} >> /etc/apk/repositories\napk update"
+        return f"apk adds source {name}", privileged(["sh", "-c", script])
+
+    if source == "xbps":
+        require_binary("xbps-install")
+        script = (
+            "set -e\n"
+            "install -d -m 0755 /etc/xbps.d\n"
+            f"printf 'repository=%s\\n' {quoted_url} > /etc/xbps.d/{quoted_name}.conf\n"
+            "xbps-install -S"
+        )
+        return f"XBPS adds source {name}", privileged(["sh", "-c", script])
+
+    if source == "eopkg":
+        require_binary("eopkg")
+        script = f"set -e\neopkg add-repo {quoted_name} {quoted_url}\neopkg update-repo {quoted_name}"
+        return f"eopkg adds source {name}", privileged(["sh", "-c", script])
+
+    raise ApiError("Unknown source.", 404)
+
+
+def package_manager_tools() -> list[dict[str, Any]]:
+    tools: list[dict[str, Any]] = []
+    for tool in PACKAGE_MANAGER_TOOLS:
+        item = dict(tool)
+        item["installed"] = bool(which(str(tool["binary"])))
+        item["source"] = "manager"
+        tools.append(item)
+    return tools
+
+
+def install_package_manager_command(tool_id: str) -> tuple[str, list[str]]:
+    tool_id = tool_id.strip().lower()
+    if tool_id == "brew":
+        require_binary("bash")
+        require_binary("curl")
+        return (
+            "Homebrew installs itself",
+            ["bash", "-c", 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'],
+        )
+    if tool_id == "npm":
+        return native_install_command(
+            {
+                "apt": ["nodejs", "npm"],
+                "dnf": ["nodejs", "npm"],
+                "zypper": ["nodejs", "npm"],
+                "pacman": ["npm"],
+                "apk": ["nodejs", "npm"],
+                "xbps": ["nodejs", "npm"],
+                "eopkg": ["nodejs", "npm"],
+            },
+            "System package manager installs npm",
+        )
+    if tool_id == "pip":
+        return native_install_command(
+            {
+                "apt": ["pipx"],
+                "dnf": ["pipx"],
+                "zypper": ["python3-pipx"],
+                "pacman": ["python-pipx"],
+                "apk": ["pipx"],
+                "xbps": ["python3-pipx"],
+                "eopkg": ["python3-pipx"],
+            },
+            "System package manager installs pipx",
+        )
+    if tool_id == "flatpak":
+        return native_install_command(
+            {
+                "apt": ["flatpak"],
+                "dnf": ["flatpak"],
+                "zypper": ["flatpak"],
+                "pacman": ["flatpak"],
+                "apk": ["flatpak"],
+                "xbps": ["flatpak"],
+                "eopkg": ["flatpak"],
+            },
+            "System package manager installs Flatpak",
+        )
+    if tool_id == "snap":
+        return native_install_command(
+            {
+                "apt": ["snapd"],
+                "dnf": ["snapd"],
+                "zypper": ["snapd"],
+                "pacman": ["snapd"],
+                "apk": ["snapd"],
+                "xbps": ["snapd"],
+                "eopkg": ["snapd"],
+            },
+            "System package manager installs Snap",
+        )
+    raise ApiError("Unknown package manager installer.", 404)
 
 
 def start_job(label: str, command: list[str]) -> Job:
@@ -1545,10 +2195,7 @@ def status() -> dict[str, Any]:
         if code == 0:
             pacman_repos = [line.strip() for line in output.splitlines() if line.strip()]
     helper = aur_helper()
-    python = python_executable()
-    pip_ready = False
-    if python:
-        pip_ready = run_capture([python, "-m", "pip", "--version"])[0] == 0
+    pip_ready = bool(which("pipx"))
     return {
         "app": APP_NAME,
         "paths": {
@@ -1573,7 +2220,7 @@ def status() -> dict[str, Any]:
             "snap": {"available": bool(which("snap")), "detail": which("snap") or "snap missing"},
             "brew": {"available": bool(which("brew")), "detail": which("brew") or "brew missing"},
             "npm": {"available": bool(which("npm")), "detail": which("npm") or "npm missing"},
-            "pip": {"available": pip_ready, "detail": f"{python} -m pip" if pip_ready else "python3/pip missing"},
+            "pip": {"available": pip_ready, "detail": which("pipx") if pip_ready else "pipx missing"},
             "manual": {"available": True, "detail": str(CONFIG_DIR)},
         },
     }
@@ -1663,6 +2310,13 @@ class Handler(BaseHTTPRequestHandler):
                 jobs = [job_to_dict(job) for job in sorted(JOBS.values(), key=lambda item: item.created_at, reverse=True)]
             self.send_json({"items": jobs[:20]})
             return
+        if path == "/api/manager-tools":
+            self.send_json({"items": package_manager_tools()})
+            return
+        if path == "/api/updates":
+            include_non_gui = query.get("includeNonGui", ["1"])[0] != "0"
+            self.send_json({"items": list_all_updates(include_non_gui=include_non_gui)})
+            return
         match = re.match(r"^/api/jobs/([A-Za-z0-9]+)$", path)
         if match:
             with JOBS_LOCK:
@@ -1685,6 +2339,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"removed": entry})
                 return
             label, command = uninstall_command(source, str(payload.get("name", "")))
+            self.send_json({"job": job_to_dict(start_job(label, command))})
+            return
+        if path == "/api/update":
+            label, command = update_command(str(payload.get("source", "")), str(payload.get("name", "")))
+            self.send_json({"job": job_to_dict(start_job(label, command))})
+            return
+        if path == "/api/package-source":
+            label, command = add_package_source_command(payload)
+            self.send_json({"job": job_to_dict(start_job(label, command))})
+            return
+        if path == "/api/install-manager":
+            label, command = install_package_manager_command(str(payload.get("id", "")))
             self.send_json({"job": job_to_dict(start_job(label, command))})
             return
         if path == "/api/manual/appimage":

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -35,6 +36,11 @@ LEGACY_DESKTOP_FILES = (
     Path.home() / ".local" / "share" / "applications" / "arch-software-manager.desktop",
 )
 BIN_FILE = Path.home() / ".local" / "bin" / "omnipkg"
+LEGACY_APP_DIR = Path.home() / ".local" / "share" / "arch-software-manager"
+LEGACY_BIN_FILES = (
+    Path.home() / ".local" / "bin" / "arch-software-manager",
+    Path.home() / ".local" / "bin" / "arch_software_manager",
+)
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
 SOURCES = [
@@ -50,12 +56,11 @@ SOURCES = [
     ("snap", "Snap"),
     ("brew", "Homebrew"),
     ("npm", "npm"),
-    ("pip", "pip"),
+    ("pip", "pipx"),
 ]
 
 TRANSLATIONS = {
     "en": {
-        "activity_title": "Task log",
         "admin_already_root": "The app is already running with root privileges.",
         "admin_authorized": "Admin authorization prepared.",
         "admin_not_confirmed": "Admin authorization was not confirmed. System packages will ask again later.",
@@ -70,36 +75,58 @@ TRANSLATIONS = {
         "archive_failed": "Archive failed: {error}",
         "archive_file": "Archive file",
         "archive_installed": "{name} installed",
+        "add_source": "Add source",
+        "add_source_failed": "Adding source failed: {error}",
+        "add_source_started": "Adding source: {name}",
+        "all_packages": "All packages",
+        "components": "Components",
         "cancel": "Cancel",
         "choose": "Choose",
         "choose_file": "Choose a file",
+        "close": "Close",
         "desktop_launcher_logo": "Desktop launcher logo",
         "discover": "Discover",
+        "distribution": "Distribution",
         "empty_discover": "Search for software. OmniPkg will look across every available source.",
         "entries_count": "{count} of {total} entries",
+        "error_details": "Error details",
         "executable_inside_archive": "Executable inside archive",
         "install": "Install",
         "install_appimage": "Install AppImage",
         "install_archive": "Install archive",
+        "install_manager": "Install package managers",
+        "install_manager_failed": "Package manager installation failed: {error}",
+        "install_manager_started": "Installing package manager: {name}",
+        "install_missing_manager_prompt": "{name} is not installed. Install it now?",
+        "installing_now": "Installing...",
         "installed": "Installed",
         "installed_load_failed": "Installed packages could not be loaded.",
         "installed_load_failed_log": "Installed packages could not be loaded: {error}",
+        "installed_state": "Installed",
         "job_not_found": "Job not found.",
+        "job_failed": "{label} failed ({code})",
         "job_started": "Job started: {job_id}",
+        "key_url": "Signing key URL",
         "language": "Language",
         "loading_installed": "Loading installed packages...",
         "manual": "Manual",
         "manual_install": "Manual install",
+        "manager": "Manager",
         "min_chars": "Please enter at least two characters.",
         "missing": "missing",
         "mode_all": "all packages",
         "mode_gui": "graphical apps",
+        "native_source": "System package sources",
         "no_installed": "No installed entries found.",
+        "no_job_output": "The package manager did not return any additional output.",
         "no_results": "No results in the available sources.",
+        "no_updates": "No updates found.",
+        "no": "No",
         "pkexec_missing": "pkexec is missing. Install polkit/pkexec for graphical admin prompts.",
         "ready": "ready",
         "refresh": "Refresh",
         "remove": "Remove",
+        "removing_now": "Removing...",
         "removed": "{name} removed",
         "removal_failed": "Removal failed: {error}",
         "search": "Search",
@@ -109,13 +136,23 @@ TRANSLATIONS = {
         "search_results": "Search results for \"{query}\"",
         "search_started": "Search started: {query} ({mode})",
         "searching": "OmniPkg is searching {mode} across all available sources...",
+        "source_name": "Source name",
+        "source_url": "Repository URL",
         "source_status_failed": "Source status failed: {error}",
         "tagline": "One roof for all your package sources",
         "title": "OmniPkg",
         "unknown_admin": "Neither pkexec nor sudo was found. System-wide installs cannot start.",
+        "update": "Update",
+        "update_all": "Update all",
+        "update_failed": "Update failed: {error}",
+        "update_started": "Update started: {source}",
+        "updates_check_failed": "Updates could not be checked: {error}",
+        "updates_found": "{count} updates available",
+        "checking_updates": "Checking for updates...",
+        "updates": "Updates",
+        "yes": "Yes",
     },
     "de": {
-        "activity_title": "Aufgabenprotokoll",
         "admin_already_root": "Die App läuft bereits mit Root-Rechten.",
         "admin_authorized": "Admin-Freigabe ist vorbereitet.",
         "admin_not_confirmed": "Admin-Freigabe wurde nicht bestätigt. Systempakete fragen später erneut nach.",
@@ -130,36 +167,58 @@ TRANSLATIONS = {
         "archive_failed": "Archiv fehlgeschlagen: {error}",
         "archive_file": "Archivdatei",
         "archive_installed": "{name} installiert",
+        "add_source": "Quelle hinzufügen",
+        "add_source_failed": "Quelle konnte nicht hinzugefügt werden: {error}",
+        "add_source_started": "Quelle wird hinzugefügt: {name}",
+        "all_packages": "Alle Pakete",
+        "components": "Komponenten",
         "cancel": "Abbrechen",
         "choose": "Auswählen",
         "choose_file": "Datei auswählen",
+        "close": "Schließen",
         "desktop_launcher_logo": "Logo für Anwendungsmenü",
         "discover": "Entdecken",
+        "distribution": "Distribution",
         "empty_discover": "Suche nach Software. OmniPkg durchsucht jede verfügbare Quelle.",
         "entries_count": "{count} von {total} Einträgen",
+        "error_details": "Fehlerdetails",
         "executable_inside_archive": "Programmdatei im Archiv",
         "install": "Installieren",
         "install_appimage": "AppImage installieren",
         "install_archive": "Archiv installieren",
+        "install_manager": "Paketmanager installieren",
+        "install_manager_failed": "Paketmanager-Installation fehlgeschlagen: {error}",
+        "install_manager_started": "Paketmanager wird installiert: {name}",
+        "install_missing_manager_prompt": "{name} ist nicht installiert. Jetzt installieren?",
+        "installing_now": "Wird installiert",
         "installed": "Installiert",
         "installed_load_failed": "Installierte Pakete konnten nicht geladen werden.",
         "installed_load_failed_log": "Installierte Pakete konnten nicht geladen werden: {error}",
+        "installed_state": "Installiert",
         "job_not_found": "Aufgabe nicht gefunden.",
+        "job_failed": "{label} fehlgeschlagen ({code})",
         "job_started": "Aufgabe gestartet: {job_id}",
+        "key_url": "URL des Signaturschlüssels",
         "language": "Sprache",
         "loading_installed": "Installierte Pakete werden geladen...",
         "manual": "Manuell",
         "manual_install": "Manuell installieren",
+        "manager": "Manager",
         "min_chars": "Bitte mindestens zwei Zeichen eingeben.",
         "missing": "fehlt",
         "mode_all": "allen Paketen",
         "mode_gui": "grafischen Apps",
+        "native_source": "System-Paketquellen",
         "no_installed": "Keine installierten Einträge gefunden.",
+        "no_job_output": "Der Paketmanager hat keine weiteren Details ausgegeben.",
         "no_results": "Keine Treffer in den verfügbaren Quellen.",
+        "no_updates": "Keine Updates gefunden.",
+        "no": "Nein",
         "pkexec_missing": "pkexec fehlt. Installiere polkit/pkexec für grafische Admin-Abfragen.",
         "ready": "bereit",
         "refresh": "Aktualisieren",
         "remove": "Deinstallieren",
+        "removing_now": "Wird deinstalliert",
         "removed": "{name} entfernt",
         "removal_failed": "Entfernen fehlgeschlagen: {error}",
         "search": "Suchen",
@@ -169,10 +228,21 @@ TRANSLATIONS = {
         "search_results": "Suchergebnisse für \"{query}\"",
         "search_started": "Suche gestartet: {query} ({mode})",
         "searching": "OmniPkg sucht nach {mode} in allen verfügbaren Quellen...",
+        "source_name": "Quellenname",
+        "source_url": "Repository-URL",
         "source_status_failed": "Quellenstatus fehlgeschlagen: {error}",
         "tagline": "Ein Dach für alle Paketquellen",
         "title": "OmniPkg",
         "unknown_admin": "Weder pkexec noch sudo wurde gefunden. Systemweite Installationen können nicht starten.",
+        "update": "Aktualisieren",
+        "update_all": "Alle aktualisieren",
+        "update_failed": "Aktualisierung fehlgeschlagen: {error}",
+        "update_started": "Aktualisierung gestartet: {source}",
+        "updates_check_failed": "Updates konnten nicht geprüft werden: {error}",
+        "updates_found": "{count} Updates verfügbar",
+        "checking_updates": "Updates werden gesucht...",
+        "updates": "Updates",
+        "yes": "Ja",
     },
 }
 
@@ -220,26 +290,6 @@ window {
 
 .main {
   padding: 22px 24px 24px;
-}
-
-.activity {
-  background: #151b1d;
-  color: #dce7e4;
-  min-width: 330px;
-}
-
-.activity-title {
-  padding: 18px;
-  border-bottom: 1px solid rgba(255,255,255,.12);
-  font-weight: 800;
-}
-
-.activity-log {
-  padding: 14px;
-  color: #dce7e4;
-  font-family: monospace;
-  font-size: 12px;
-  line-height: 1.45;
 }
 
 .brand-mark {
@@ -378,6 +428,16 @@ window {
   box-shadow: 0 18px 45px rgba(31,37,39,.12);
 }
 
+.panel-title {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.status-ok {
+  color: #0f766e;
+  font-weight: 900;
+}
+
 .field-label {
   color: #687477;
   font-size: 13px;
@@ -467,11 +527,16 @@ def install_launcher() -> None:
     for legacy_file in LEGACY_DESKTOP_FILES:
         if legacy_file.exists():
             legacy_file.unlink()
+    for legacy_bin in LEGACY_BIN_FILES:
+        if legacy_bin.exists():
+            legacy_bin.unlink()
+    if LEGACY_APP_DIR.exists():
+        shutil.rmtree(LEGACY_APP_DIR, ignore_errors=True)
     desktop = (
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=OmniPkg\n"
-        "Comment=Install and manage apps from APT, DNF, Zypper, Pacman, AUR, APK, XBPS, eopkg, Flatpak, Snap, Homebrew, npm, pip and AppImages\n"
+        "Comment=Install and manage apps from APT, DNF, Zypper, Pacman, AUR, APK, XBPS, eopkg, Flatpak, Snap, Homebrew, npm, pipx and AppImages\n"
         f"Exec={BIN_FILE}\n"
         "Icon=omnipkg\n"
         "Terminal=false\n"
@@ -513,7 +578,7 @@ def icon_widget(item: dict[str, Any], fallback: str = "?") -> Gtk.Widget:
 
 
 class PackageRow(Gtk.ListBoxRow):
-    def __init__(self, item: dict[str, Any], action_label: str, action_class: str, callback: Callable[[dict[str, Any]], None]):
+    def __init__(self, item: dict[str, Any], action_label: str, action_class: str, callback: Callable[[dict[str, Any], "PackageRow"], None]):
         super().__init__()
         self.item = item
         self.add_css_class("package-row")
@@ -553,10 +618,87 @@ class PackageRow(Gtk.ListBoxRow):
         meta.add_css_class("muted")
         text_box.append(meta)
 
-        button = Gtk.Button(label=action_label)
-        button.add_css_class(action_class)
-        button.connect("clicked", lambda _button: callback(item))
-        box.append(button)
+        self.action_button = Gtk.Button(label=action_label)
+        self.action_button.add_css_class(action_class)
+        self.action_button.connect("clicked", lambda _button: callback(item, self))
+        box.append(self.action_button)
+
+        self.busy_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.busy_spinner = Gtk.Spinner()
+        self.busy_label = Gtk.Label(label="")
+        self.busy_box.append(self.busy_spinner)
+        self.busy_box.append(self.busy_label)
+        self.busy_box.set_visible(False)
+        box.append(self.busy_box)
+
+    def set_busy(self, text: str) -> None:
+        self.action_button.set_sensitive(False)
+        self.action_button.set_visible(False)
+        self.busy_label.set_text(text)
+        self.busy_spinner.start()
+        self.busy_box.set_visible(True)
+
+    def clear_busy(self) -> None:
+        self.busy_spinner.stop()
+        self.busy_box.set_visible(False)
+        self.action_button.set_visible(True)
+        self.action_button.set_sensitive(True)
+
+
+class ActionRow(Gtk.ListBoxRow):
+    def __init__(
+        self,
+        title: str,
+        detail: str,
+        action_label: str,
+        action_class: str,
+        callback: Callable[["ActionRow"], None],
+        disabled: bool = False,
+    ):
+        super().__init__()
+        self.add_css_class("package-row")
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        box.set_valign(Gtk.Align.CENTER)
+        self.set_child(box)
+
+        text_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        text_box.set_hexpand(True)
+        box.append(text_box)
+        title_label = Gtk.Label(label=title)
+        title_label.set_xalign(0)
+        title_label.add_css_class("package-name")
+        text_box.append(title_label)
+        detail_label = Gtk.Label(label=detail)
+        detail_label.set_xalign(0)
+        detail_label.set_wrap(True)
+        detail_label.add_css_class("muted")
+        text_box.append(detail_label)
+
+        self.action_button = Gtk.Button(label=action_label)
+        self.action_button.add_css_class(action_class)
+        self.action_button.set_sensitive(not disabled)
+        self.action_button.connect("clicked", lambda _button: callback(self))
+        box.append(self.action_button)
+
+        self.busy_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.busy_spinner = Gtk.Spinner()
+        self.busy_label = Gtk.Label(label="")
+        self.busy_box.append(self.busy_spinner)
+        self.busy_box.append(self.busy_label)
+        self.busy_box.set_visible(False)
+        box.append(self.busy_box)
+
+    def set_busy(self, text: str) -> None:
+        self.action_button.set_visible(False)
+        self.busy_label.set_text(text)
+        self.busy_spinner.start()
+        self.busy_box.set_visible(True)
+
+    def clear_busy(self) -> None:
+        self.busy_spinner.stop()
+        self.busy_box.set_visible(False)
+        self.action_button.set_visible(True)
+        self.action_button.set_sensitive(True)
 
 
 class PathField(Gtk.Box):
@@ -631,6 +773,15 @@ class MainWindow(Gtk.ApplicationWindow):
         self.current_view = "discover"
         self.results: list[dict[str, Any]] = []
         self.installed: list[dict[str, Any]] = []
+        self.updates: list[dict[str, Any]] = []
+        self.installed_keys: set[tuple[str, str]] = set()
+        self.pending_actions: dict[tuple[str, str], str] = {}
+        self.pending_update_packages: dict[tuple[str, str], str] = {}
+        self.pending_update_sources: set[str] = set()
+        self.pending_manager_installs: set[str] = set()
+        self.update_queue: list[dict[str, Any]] = []
+        self.update_source_queue: list[str] = []
+        self.batch_update_errors: list[str] = []
         self.log_lines: list[str] = []
         self.search_token = 0
         self.suspend_events = False
@@ -640,6 +791,7 @@ class MainWindow(Gtk.ApplicationWindow):
         self.show_empty(self.results_list, tr("empty_discover"))
         self.show_empty(self.installed_list, tr("loading_installed"))
         self.load_installed()
+        self.refresh_package_databases()
         if not skip_admin:
             self.prepare_admin()
 
@@ -710,7 +862,7 @@ class MainWindow(Gtk.ApplicationWindow):
         tabs.add_css_class("tabs")
         main.append(tabs)
         self.tab_buttons: dict[str, Gtk.Button] = {}
-        for view, label in (("discover", tr("discover")), ("installed", tr("installed")), ("manual", tr("manual"))):
+        for view, label in (("discover", tr("discover")), ("installed", tr("installed")), ("updates", tr("updates")), ("manual", tr("manual"))):
             button = Gtk.Button(label=label)
             button.add_css_class("tab-button")
             button.connect("clicked", lambda _button, selected=view: self.set_view(selected))
@@ -739,22 +891,12 @@ class MainWindow(Gtk.ApplicationWindow):
         self.installed_list.set_selection_mode(Gtk.SelectionMode.NONE)
         self.stack.add_named(self.make_installed_page(), "installed")
 
+        self.updates_list = Gtk.ListBox()
+        self.updates_list.set_selection_mode(Gtk.SelectionMode.NONE)
+        self.stack.add_named(self.make_updates_page(), "updates")
+
         self.stack.add_named(self.make_manual_page(), "manual")
         self.set_view("discover")
-
-        activity = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        activity.add_css_class("activity")
-        root.append(activity)
-        activity.append(Gtk.Label(label=tr("activity_title"), css_classes=["activity-title"]))
-        self.log_label = Gtk.Label(label="")
-        self.log_label.set_xalign(0)
-        self.log_label.set_yalign(0)
-        self.log_label.set_wrap(True)
-        self.log_label.add_css_class("activity-log")
-        scroll = Gtk.ScrolledWindow()
-        scroll.set_vexpand(True)
-        scroll.set_child(self.log_label)
-        activity.append(scroll)
 
     def on_language_changed(self, combo: Gtk.ComboBoxText) -> None:
         language = combo.get_active_id()
@@ -769,8 +911,8 @@ class MainWindow(Gtk.ApplicationWindow):
         self.build_ui()
         self.search_entry.set_text(query)
         self.only_gui_switch.set_active(only_gui)
-        self.log_label.set_text("\n".join(self.log_lines))
         self.render_source_chips()
+        self.render_updates()
         if self.results:
             if query.strip():
                 self.results_title.set_text(tr("search_results", query=query.strip()))
@@ -806,6 +948,38 @@ class MainWindow(Gtk.ApplicationWindow):
         scroll = Gtk.ScrolledWindow()
         scroll.set_vexpand(True)
         scroll.set_child(self.installed_list)
+        page.append(scroll)
+        return page
+
+    def make_updates_page(self) -> Gtk.Widget:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        update_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        page.append(update_header)
+        title = Gtk.Label(label=tr("updates"))
+        title.set_xalign(0)
+        title.add_css_class("section-title")
+        update_header.append(title)
+        self.updates_meta = Gtk.Label(label="")
+        self.updates_meta.add_css_class("muted")
+        update_header.append(self.updates_meta)
+        update_header.append(Gtk.Label(label=tr("apps_only")))
+        self.updates_only_gui_switch = Gtk.Switch()
+        self.updates_only_gui_switch.set_active(False)
+        self.updates_only_gui_switch.connect("notify::active", lambda _switch, _param: self.render_updates())
+        update_header.append(self.updates_only_gui_switch)
+        refresh = Gtk.Button(label=tr("refresh"))
+        refresh.add_css_class("secondary")
+        refresh.connect("clicked", lambda _button: self.load_updates())
+        update_header.append(refresh)
+        all_button = Gtk.Button(label=tr("update_all"))
+        all_button.add_css_class("primary")
+        all_button.connect("clicked", lambda _button: self.update_all_sources())
+        update_header.append(all_button)
+
+        self.show_empty(self.updates_list, tr("checking_updates"))
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(self.updates_list)
         page.append(scroll)
         return page
 
@@ -851,7 +1025,43 @@ class MainWindow(Gtk.ApplicationWindow):
         archive_button.add_css_class("primary")
         archive_button.connect("clicked", lambda _button: self.install_archive())
         archive.append(archive_button)
-        return page
+
+        source_panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        source_panel.add_css_class("tool-panel")
+        grid.attach(source_panel, 0, 1, 2, 1)
+        source_panel.append(Gtk.Label(label=tr("native_source"), xalign=0, css_classes=["panel-title"]))
+        source_grid = Gtk.Grid(column_spacing=12, row_spacing=12)
+        source_grid.set_column_homogeneous(True)
+        source_panel.append(source_grid)
+
+        manager_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        manager_box.append(Gtk.Label(label=tr("manager"), xalign=0, css_classes=["field-label"]))
+        self.source_manager_combo = Gtk.ComboBoxText()
+        for source_id, label in SOURCES:
+            if source_id in core.SYSTEM_SOURCE_ORDER:
+                self.source_manager_combo.append(source_id, label)
+        self.source_manager_combo.set_active_id(core.native_package_source() or "apt")
+        manager_box.append(self.source_manager_combo)
+        source_grid.attach(manager_box, 0, 0, 1, 1)
+
+        self.source_name = TextField(tr("source_name"), "vendor-tools")
+        self.source_url = TextField(tr("source_url"), "https://repo.example.com/packages")
+        self.source_key_url = TextField(tr("key_url"), "https://repo.example.com/signing-key.gpg")
+        self.source_distribution = TextField(tr("distribution"), core.os_release_codename() or "stable")
+        self.source_components = TextField(tr("components"), "main")
+        source_grid.attach(self.source_name, 1, 0, 1, 1)
+        source_grid.attach(self.source_url, 0, 1, 2, 1)
+        source_grid.attach(self.source_key_url, 0, 2, 2, 1)
+        source_grid.attach(self.source_distribution, 0, 3, 1, 1)
+        source_grid.attach(self.source_components, 1, 3, 1, 1)
+        add_button = Gtk.Button(label=tr("add_source"))
+        add_button.add_css_class("primary")
+        add_button.connect("clicked", lambda _button: self.add_package_source())
+        source_panel.append(add_button)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(page)
+        return scroll
 
     def set_view(self, view: str) -> None:
         self.current_view = view
@@ -863,12 +1073,16 @@ class MainWindow(Gtk.ApplicationWindow):
                 button.remove_css_class("active")
         if view == "installed":
             self.render_installed()
+        if view == "updates" and not self.updates:
+            self.load_updates()
 
     def on_search_changed(self, _entry: Gtk.SearchEntry) -> None:
         if self.suspend_events:
             return
         if self.current_view == "installed":
             self.render_installed()
+        if self.current_view == "updates":
+            self.render_updates()
 
     def on_gui_filter_changed(self, _switch: Gtk.Switch, _param: Any) -> None:
         if self.suspend_events:
@@ -888,23 +1102,50 @@ class MainWindow(Gtk.ApplicationWindow):
 
         run_in_thread(core.status, done)
 
+    def refresh_package_databases(self) -> None:
+        try:
+            label, command = core.refresh_metadata_command()
+            job = core.start_job(label, command)
+            self.watch_job(job.id, refresh_status_after=True, show_failure_dialog=False)
+        except Exception as exc:  # noqa: BLE001 - best-effort background task
+            self.log(str(exc))
+
     def render_source_chips(self) -> None:
         while child := self.source_chips.get_first_child():
             self.source_chips.remove(child)
         sources = self.status_data.get("sources", {}) if self.status_data else {}
+        installable_managers = {str(tool.get("id")): str(tool.get("name")) for tool in core.package_manager_tools()}
         for source_id, label in SOURCES:
             meta = sources.get(source_id, {})
-            chip = Gtk.Label(label=f"{label}: {tr('ready') if meta.get('available') else tr('missing')}")
+            chip_text = f"{label}: {tr('ready') if meta.get('available') else tr('missing')}"
+            if not meta.get("available") and source_id in installable_managers:
+                chip = Gtk.Button(label=chip_text)
+                chip.connect("clicked", lambda _button, selected=source_id, manager_name=installable_managers[source_id]: self.offer_install_manager_tool(selected, manager_name))
+            else:
+                chip = Gtk.Label(label=chip_text)
             chip.add_css_class("chip")
             if not meta.get("available"):
                 chip.add_css_class("off")
             self.source_chips.append(chip)
 
+    @staticmethod
+    def source_label(source_id: str) -> str:
+        return next((label for item_id, label in SOURCES if item_id == source_id), source_id)
+
     def log(self, message: str) -> None:
         stamp = time.strftime("%H:%M:%S")
         self.log_lines.append(f"[{stamp}] {message}")
         self.log_lines = self.log_lines[-180:]
-        self.log_label.set_text("\n".join(self.log_lines))
+
+    @staticmethod
+    def package_key(item: dict[str, Any]) -> tuple[str, str]:
+        source = str(item.get("source", ""))
+        package = str(item.get("packageName") or item.get("id") or item.get("name") or "").casefold()
+        return source, package
+
+    def is_installed(self, item: dict[str, Any]) -> bool:
+        source, package = self.package_key(item)
+        return bool(package) and (source, package) in self.installed_keys
 
     def clear_list(self, list_box: Gtk.ListBox) -> None:
         while child := list_box.get_first_child():
@@ -954,7 +1195,62 @@ class MainWindow(Gtk.ApplicationWindow):
     def render_results(self) -> None:
         self.clear_list(self.results_list)
         for item in self.results:
-            self.results_list.append(PackageRow(item, tr("install"), "primary", self.install_package))
+            if self.is_installed(item):
+                row = PackageRow(item, tr("remove"), "danger", self.uninstall_package)
+            else:
+                row = PackageRow(item, tr("install"), "primary", self.install_package)
+            pending = self.pending_actions.get(self.package_key(item))
+            if pending == "install":
+                row.set_busy(tr("installing_now"))
+            elif pending == "remove":
+                row.set_busy(tr("removing_now"))
+            self.results_list.append(row)
+
+    def load_updates(self) -> None:
+        if hasattr(self, "updates_list"):
+            self.show_empty(self.updates_list, tr("checking_updates"))
+
+        def done(items: Any, error: Exception | None) -> bool:
+            if error:
+                self.log(tr("updates_check_failed", error=error))
+                self.show_empty(self.updates_list, tr("updates_check_failed", error=error))
+                return False
+            self.updates = items
+            self.render_updates()
+            return False
+
+        run_in_thread(lambda: core.list_all_updates(include_non_gui=True), done)
+
+    def visible_updates(self) -> list[dict[str, Any]]:
+        query = self.search_entry.get_text().strip().lower() if self.current_view == "updates" else ""
+        items = self.updates
+        if hasattr(self, "updates_only_gui_switch") and self.updates_only_gui_switch.get_active():
+            items = [item for item in items if item.get("gui")]
+        if query:
+            items = [
+                item
+                for item in items
+                if query in str(item.get("name", "")).lower()
+                or query in str(item.get("source", "")).lower()
+                or query in str(item.get("packageName", "")).lower()
+            ]
+        return items
+
+    def render_updates(self) -> None:
+        if not hasattr(self, "updates_list"):
+            return
+        items = self.visible_updates()
+        self.updates_meta.set_text(tr("updates_found", count=len(items)) if items else "")
+        if not items:
+            self.show_empty(self.updates_list, tr("no_updates"))
+            return
+        self.clear_list(self.updates_list)
+        for item in items:
+            row = PackageRow(item, tr("update"), "primary", self.update_package)
+            pending = self.pending_update_packages.get(self.package_key(item))
+            if pending:
+                row.set_busy(tr("update"))
+            self.updates_list.append(row)
 
     def load_installed(self) -> None:
         def done(items: Any, error: Exception | None) -> bool:
@@ -963,7 +1259,12 @@ class MainWindow(Gtk.ApplicationWindow):
                 self.show_empty(self.installed_list, tr("installed_load_failed"))
                 return False
             self.installed = items
+            self.installed_keys = {
+                key for key in (self.package_key(item) for item in self.installed) if key[1]
+            }
             self.render_installed()
+            if self.results:
+                self.render_results()
             return False
 
         run_in_thread(lambda: core.list_installed("all"), done)
@@ -991,26 +1292,174 @@ class MainWindow(Gtk.ApplicationWindow):
         for item in sorted(items, key=lambda value: (value.get("source", ""), value.get("name", "").lower())):
             self.installed_list.append(PackageRow(item, tr("remove"), "danger", self.uninstall_package))
 
-    def install_package(self, item: dict[str, Any]) -> None:
+    def update_package(self, item: dict[str, Any], row: PackageRow | None = None, continue_queue: bool = False) -> None:
+        package_key = self.package_key(item)
+        self.pending_update_packages[package_key] = "update"
+        if row:
+            row.set_busy(tr("update"))
+        source = str(item.get("source", ""))
+        name = str(item.get("packageName") or item.get("id") or item.get("name") or "")
+        try:
+            label, command = core.update_command(source, name)
+            job = core.start_job(label, command)
+            self.log(tr("update_started", source=self.source_label(source)))
+            self.watch_job(job.id, update_package=package_key, continue_update_queue=continue_queue)
+        except Exception as exc:  # noqa: BLE001 - UI boundary
+            self.pending_update_packages.pop(package_key, None)
+            if row:
+                row.clear_busy()
+            self.log(tr("update_failed", error=exc))
+            self.show_error_details(tr("update_failed", error=exc), str(exc))
+            if continue_queue:
+                self.start_next_queued_update()
+
+    def update_all_sources(self) -> None:
+        sources = self.status_data.get("sources", {}) if self.status_data else {}
+        queued: list[str] = []
+        for source, _label in SOURCES:
+            if source in {"manual", "desktop"}:
+                continue
+            if sources.get(source, {}).get("available") and source not in self.pending_update_sources:
+                queued.append(source)
+        self.batch_update_errors = []
+        self.update_source_queue.extend(queued)
+        self.render_updates()
+        self.start_next_queued_update_source()
+
+    def start_next_queued_update(self) -> None:
+        if self.pending_update_packages:
+            return
+        while self.update_queue:
+            item = self.update_queue.pop(0)
+            if self.package_key(item) not in self.pending_update_packages:
+                self.update_package(item, continue_queue=True)
+                return
+
+    def start_next_queued_update_source(self) -> None:
+        if self.pending_update_sources:
+            return
+        while self.update_source_queue:
+            source = self.update_source_queue.pop(0)
+            if source not in self.pending_update_sources:
+                self.update_source(source, continue_queue=True)
+                return
+
+    def update_source(self, source: str, continue_queue: bool = False) -> None:
+        self.pending_update_sources.add(source)
+        try:
+            label, command = core.update_command(source)
+            job = core.start_job(label, command)
+            self.log(tr("update_started", source=self.source_label(source)))
+            self.watch_job(job.id, update_source=source, continue_update_queue=continue_queue, show_failure_dialog=not continue_queue)
+        except Exception as exc:  # noqa: BLE001 - UI boundary
+            self.pending_update_sources.discard(source)
+            self.log(tr("update_failed", error=exc))
+            self.show_error_details(tr("update_failed", error=exc), str(exc))
+            if continue_queue:
+                self.start_next_queued_update_source()
+
+    def add_package_source(self) -> None:
+        manager = self.source_manager_combo.get_active_id() if hasattr(self, "source_manager_combo") else core.native_package_source()
+        payload = {
+            "manager": manager,
+            "name": self.source_name.get_text(),
+            "url": self.source_url.get_text(),
+            "keyUrl": self.source_key_url.get_text(),
+            "distribution": self.source_distribution.get_text(),
+            "components": self.source_components.get_text(),
+        }
+        try:
+            label, command = core.add_package_source_command(payload)
+            job = core.start_job(label, command)
+            self.log(tr("add_source_started", name=payload["name"]))
+            self.watch_job(job.id, refresh_status_after=True)
+        except Exception as exc:  # noqa: BLE001 - UI boundary
+            self.log(tr("add_source_failed", error=exc))
+            self.show_error_details(tr("add_source_failed", error=exc), str(exc))
+
+    def offer_install_manager_tool(self, tool_id: str, name: str) -> None:
+        dialog = Gtk.Window(title=tr("install_manager"), transient_for=self, modal=True)
+        dialog.set_default_size(420, 160)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        root.set_margin_top(18)
+        root.set_margin_bottom(18)
+        root.set_margin_start(18)
+        root.set_margin_end(18)
+        dialog.set_child(root)
+
+        prompt = Gtk.Label(label=tr("install_missing_manager_prompt", name=name))
+        prompt.set_xalign(0)
+        prompt.set_wrap(True)
+        prompt.add_css_class("panel-title")
+        root.append(prompt)
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        actions.set_halign(Gtk.Align.END)
+        root.append(actions)
+        no_button = Gtk.Button(label=tr("no"))
+        no_button.add_css_class("secondary")
+        no_button.connect("clicked", lambda _button: dialog.close())
+        actions.append(no_button)
+        yes_button = Gtk.Button(label=tr("yes"))
+        yes_button.add_css_class("primary")
+
+        def install(_button: Gtk.Button) -> None:
+            dialog.close()
+            self.install_manager_tool(tool_id, name)
+
+        yes_button.connect("clicked", install)
+        actions.append(yes_button)
+        dialog.present()
+
+    def install_manager_tool(self, tool_id: str, name: str, row: ActionRow | None = None) -> None:
+        self.pending_manager_installs.add(tool_id)
+        if row:
+            row.set_busy(tr("installing_now"))
+        try:
+            label, command = core.install_package_manager_command(tool_id)
+            job = core.start_job(label, command)
+            self.log(tr("install_manager_started", name=name))
+            self.watch_job(job.id, manager_tool=tool_id)
+        except Exception as exc:  # noqa: BLE001 - UI boundary
+            self.pending_manager_installs.discard(tool_id)
+            if row:
+                row.clear_busy()
+            self.log(tr("install_manager_failed", error=exc))
+            self.show_error_details(tr("install_manager_failed", error=exc), str(exc))
+
+    def install_package(self, item: dict[str, Any], row: PackageRow) -> None:
+        package_key = self.package_key(item)
+        self.pending_actions[package_key] = "install"
+        row.set_busy(tr("installing_now"))
         source = item.get("source", "")
         name = item.get("packageName") or item.get("id") or item.get("name", "")
         try:
             label, command = core.install_command(source, name)
             job = core.start_job(label, command)
-            self.watch_job(job.id)
+            self.watch_job(job.id, package_key)
         except Exception as exc:  # noqa: BLE001 - UI boundary
+            self.pending_actions.pop(package_key, None)
+            row.clear_busy()
             self.log(str(exc))
+            self.show_error_details(str(exc), str(exc))
 
-    def uninstall_package(self, item: dict[str, Any]) -> None:
+    def uninstall_package(self, item: dict[str, Any], row: PackageRow) -> None:
+        package_key = self.package_key(item)
+        self.pending_actions[package_key] = "remove"
+        row.set_busy(tr("removing_now"))
         source = item.get("source", "")
         name = item.get("packageName") or item.get("id") or item.get("name", "")
         if source == "manual":
             def done(_entry: Any, error: Exception | None) -> bool:
+                self.pending_actions.pop(package_key, None)
                 if error:
                     self.log(tr("removal_failed", error=error))
+                    self.show_error_details(tr("removal_failed", error=error), str(error))
                 else:
                     self.log(tr("removed", name=name))
                     self.load_installed()
+                if self.results:
+                    self.render_results()
                 return False
 
             run_in_thread(lambda: core.uninstall_manual(str(name)), done)
@@ -1018,11 +1467,24 @@ class MainWindow(Gtk.ApplicationWindow):
         try:
             label, command = core.uninstall_command(source, name)
             job = core.start_job(label, command)
-            self.watch_job(job.id)
+            self.watch_job(job.id, package_key)
         except Exception as exc:  # noqa: BLE001 - UI boundary
+            self.pending_actions.pop(package_key, None)
+            row.clear_busy()
             self.log(str(exc))
+            self.show_error_details(str(exc), str(exc))
 
-    def watch_job(self, job_id: str) -> None:
+    def watch_job(
+        self,
+        job_id: str,
+        package_key: tuple[str, str] | None = None,
+        update_package: tuple[str, str] | None = None,
+        update_source: str | None = None,
+        manager_tool: str | None = None,
+        refresh_status_after: bool = False,
+        continue_update_queue: bool = False,
+        show_failure_dialog: bool = True,
+    ) -> None:
         self.log(tr("job_started", job_id=job_id))
         last_len = 0
 
@@ -1037,7 +1499,41 @@ class MainWindow(Gtk.ApplicationWindow):
             last_len = len(job.output)
             if job.state in {"done", "failed"}:
                 self.log(f"{job.label}: {job.state} ({job.exit_code})")
+                if package_key:
+                    self.pending_actions.pop(package_key, None)
+                if update_package:
+                    self.pending_update_packages.pop(update_package, None)
+                    self.render_updates()
+                if update_source:
+                    self.pending_update_sources.discard(update_source)
+                if manager_tool:
+                    self.pending_manager_installs.discard(manager_tool)
+                    self.refresh_status()
+                if refresh_status_after:
+                    self.refresh_status()
+                details = "\n".join(job.output[-120:]) or tr("no_job_output")
+                if job.state == "failed" and update_source and continue_update_queue:
+                    self.batch_update_errors.append(f"{job.label} ({job.exit_code})\n{details}")
+                if job.state == "failed" and show_failure_dialog:
+                    message = tr("job_failed", label=job.label, code=job.exit_code)
+                    self.log(message)
+                    self.show_error_details(message, details)
+                if self.results:
+                    self.render_results()
                 self.load_installed()
+                if update_package:
+                    self.load_updates()
+                if continue_update_queue or self.update_queue:
+                    self.start_next_queued_update()
+                if update_source:
+                    if self.update_source_queue:
+                        self.start_next_queued_update_source()
+                    else:
+                        self.load_updates()
+                        if self.batch_update_errors:
+                            details = "\n\n".join(self.batch_update_errors)
+                            self.batch_update_errors = []
+                            self.show_error_details(tr("update_failed", error="one or more package managers failed"), details)
                 return False
             return True
 
@@ -1053,6 +1549,7 @@ class MainWindow(Gtk.ApplicationWindow):
         def done(entry: Any, error: Exception | None) -> bool:
             if error:
                 self.log(tr("appimage_failed", error=error))
+                self.show_error_details(tr("appimage_failed", error=error), str(error))
             else:
                 self.log(tr("appimage_installed", name=entry.get("name")))
                 self.load_installed()
@@ -1071,12 +1568,46 @@ class MainWindow(Gtk.ApplicationWindow):
         def done(entry: Any, error: Exception | None) -> bool:
             if error:
                 self.log(tr("archive_failed", error=error))
+                self.show_error_details(tr("archive_failed", error=error), str(error))
             else:
                 self.log(tr("archive_installed", name=entry.get("name")))
                 self.load_installed()
             return False
 
         run_in_thread(lambda: core.install_archive(payload), done)
+
+    def show_error_details(self, title: str, details: str) -> None:
+        dialog = Gtk.Window(title=tr("error_details"), transient_for=self, modal=True)
+        dialog.set_default_size(720, 420)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        root.set_margin_top(16)
+        root.set_margin_bottom(16)
+        root.set_margin_start(16)
+        root.set_margin_end(16)
+        dialog.set_child(root)
+
+        title_label = Gtk.Label(label=title)
+        title_label.set_xalign(0)
+        title_label.set_wrap(True)
+        title_label.add_css_class("panel-title")
+        root.append(title_label)
+
+        text = Gtk.TextView()
+        text.set_editable(False)
+        text.set_monospace(True)
+        text.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        text.get_buffer().set_text(details)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_vexpand(True)
+        scroll.set_child(text)
+        root.append(scroll)
+
+        close = Gtk.Button(label=tr("close"))
+        close.add_css_class("secondary")
+        close.set_halign(Gtk.Align.END)
+        close.connect("clicked", lambda _button: dialog.close())
+        root.append(close)
+        dialog.present()
 
     def prepare_admin(self) -> None:
         def admin() -> str:
@@ -1146,6 +1677,7 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="Check dependencies")
     parser.add_argument("--lang", choices=("de", "en"), help="Override UI language")
     parser.add_argument("--skip-admin", action="store_true", help="Skip admin warmup")
+    parser.add_argument("--background-refresh", action="store_true", help="Refresh package databases without opening the UI")
     args = parser.parse_args()
     if args.lang:
         set_language(args.lang)
@@ -1157,8 +1689,13 @@ def main() -> int:
     if args.check:
         print("GTK4 ok")
         print("Core ok")
-        print("Sources:", ", ".join(source for source, _label in SOURCES))
+        print("Sources:", ", ".join(label for _source, label in SOURCES))
         return 0
+    if args.background_refresh:
+        code, output = core.refresh_system_databases()
+        if output:
+            print(output)
+        return code
 
     if ASKPASS_SCRIPT.exists():
         os.environ.setdefault("SUDO_ASKPASS", str(ASKPASS_SCRIPT))

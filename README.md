@@ -1,6 +1,8 @@
-<p align="center">
-  <img src="assets/omnipkg-logo-full.png" alt="OmniPkg logo" width="360">
-</p>
+<div align="center">
+  <a href="https://github.com/grosserknallkopf/OmniPkg">
+    <img src="assets/omnipkg-logo-full.png" alt="Logo"  width="150" height="150">
+  </a>
+
 
 # OmniPkg
 
@@ -24,7 +26,9 @@ current system and only enables the sources that can actually be used.
 - German UI when the system locale starts with `de`, English everywhere else
 - Native GTK4 desktop app, no local browser service
 - Manual AppImage and archive installation with desktop launcher generation
-- Installer script for app files, launcher setup and optional sudoers setup
+- Installer script for app files, launcher setup, optional sudoers setup and a
+  background updater
+- Background refreshes for package databases and OmniPkg self-updates from GitHub
 
 ## Supported Sources
 
@@ -43,7 +47,7 @@ OmniPkg uses a source only when its tools are installed.
 - **Snap**
 - **Homebrew**
 - **npm**
-- **pip** through user installs with `python -m pip install --user`
+- **pipx** for isolated PyPI applications without breaking system Python
 - **Manual installs** for AppImages and archives such as `.tar.gz`, `.tar.xz`
   and `.zip`
 
@@ -52,29 +56,47 @@ OmniPkg uses a source only when its tools are installed.
 Quickstart:
 
 ```bash
-git clone https://github.com/YOUR-USER/OmniPkg.git
+git clone https://github.com/grosserknallkopf/OmniPkg.git
 cd OmniPkg
 chmod +x install.sh
 ./install.sh
 ```
 
-`install.sh` may ask for your password when it installs dependencies or writes
-the optional sudoers helper. If you want to install only the local app files and
-menu entry, use `./install.sh --skip-deps --no-sudoers`.
+`install.sh` prints English status messages. It may ask for your password when
+it installs dependencies or writes the optional sudoers helper. If you want to
+install only the local app files and menu entry, use
+`./install.sh --skip-deps --no-sudoers --no-cron`.
 
-The installer copies OmniPkg to:
+The installer moves OmniPkg to its permanent project directory:
 
 ```text
 ~/.local/share/omnipkg
+```
+
+That directory contains the whole project, including `install.sh` and Git
+metadata when present. If you intentionally want to keep the source checkout
+where it is, run:
+
+```bash
+./install.sh --keep-source
 ```
 
 It also creates:
 
 ```text
 ~/.local/bin/omnipkg
+~/.local/bin/omnipkg-autoupdate
 ~/.local/share/applications/dev.omnipkg.omnipkg.desktop
 ~/.local/share/icons/hicolor/512x512/apps/omnipkg.png
 ~/.local/share/pixmaps/omnipkg.png
+```
+
+By default, the installer also adds a user cron entry that runs every six hours.
+The background updater refreshes system package databases and, when OmniPkg was
+installed from a Git checkout, pulls fast-forward updates from:
+
+```text
+https://github.com/grosserknallkopf/OmniPkg
 ```
 
 After installation, start OmniPkg from your application menu or run:
@@ -91,15 +113,27 @@ Skip sudoers setup:
 ./install.sh --no-sudoers
 ```
 
+Skip cron background update setup:
+
+```bash
+./install.sh --no-cron
+```
+
 Skip automatic dependency installation:
 
 ```bash
 ./install.sh --skip-deps
 ```
 
+Keep the source directory after installing:
+
+```bash
+./install.sh --keep-source
+```
+
 ## Admin Rights
 
-OmniPkg intentionally runs as a normal user. That keeps AUR, npm and pip
+OmniPkg intentionally runs as a normal user. That keeps AUR, npm and pipx
 operations out of a permanent root context.
 
 For system package managers, the installer can optionally create a narrow
@@ -120,6 +154,15 @@ to install that rule, use:
 
 Without the sudoers rule, OmniPkg uses a small GTK askpass dialog for `sudo -A`
 or falls back to `pkexec`/`sudo` when needed.
+
+## Updates
+
+OmniPkg refreshes the native system package database in the background when the
+app opens. The **Updates** tab can show available updates, while **Update all**
+runs the native update command for each available package manager, for example
+Pacman once, the AUR helper once, Flatpak once, npm once and pipx once. Batch
+failures are collected into one error dialog instead of producing a stream of
+popups.
 
 ## Application Names and Icons
 
@@ -190,19 +233,26 @@ bash -n install.sh
 
 ## GitHub
 
-This directory is ready to become a GitHub repository. If you want to publish
-directly from this machine, install and authenticate the GitHub CLI:
+The intended repository is:
+
+```text
+https://github.com/grosserknallkopf/OmniPkg
+```
+
+If you want to publish directly from this machine, install and authenticate the
+GitHub CLI:
 
 ```bash
 sudo pacman -S github-cli
 gh auth login
 ```
 
-Then create a repository and push:
+Then create the repository and push:
 
 ```bash
 git init
+git branch -M main
 git add .
 git commit -m "Initial OmniPkg release"
-gh repo create OmniPkg --public --source=. --remote=origin --push
+gh repo create grosserknallkopf/OmniPkg --public --source=. --remote=origin --push
 ```

@@ -232,29 +232,3 @@ python3 omnipkg_desktop.py --check
 python3 -m py_compile omnipkg_core.py omnipkg_desktop.py omnipkg.py
 bash -n install.sh
 ```
-
-## GitHub
-
-The intended repository is:
-
-```text
-https://github.com/grosserknallkopf/OmniPkg
-```
-
-If you want to publish directly from this machine, install and authenticate the
-GitHub CLI:
-
-```bash
-sudo pacman -S github-cli
-gh auth login
-```
-
-Then create the repository and push:
-
-```bash
-git init
-git branch -M main
-git add .
-git commit -m "Initial OmniPkg release"
-gh repo create grosserknallkopf/OmniPkg --public --source=. --remote=origin --push
-```

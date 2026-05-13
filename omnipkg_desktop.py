@@ -98,6 +98,7 @@ TRANSLATIONS = {
         "install_manager_failed": "Package manager installation failed: {error}",
         "install_manager_started": "Installing package manager: {name}",
         "install_missing_manager_prompt": "{name} is not installed. Install it now?",
+        "install_missing_manager_chip": "{name}: install",
         "installing_now": "Installing...",
         "installed": "Installed",
         "installed_load_failed": "Installed packages could not be loaded.",
@@ -146,6 +147,7 @@ TRANSLATIONS = {
         "update_all": "Update all",
         "update_failed": "Update failed: {error}",
         "update_started": "Update started: {source}",
+        "updating_now": "Updating...",
         "updates_check_failed": "Updates could not be checked: {error}",
         "updates_found": "{count} updates available",
         "checking_updates": "Checking for updates...",
@@ -190,6 +192,7 @@ TRANSLATIONS = {
         "install_manager_failed": "Paketmanager-Installation fehlgeschlagen: {error}",
         "install_manager_started": "Paketmanager wird installiert: {name}",
         "install_missing_manager_prompt": "{name} ist nicht installiert. Jetzt installieren?",
+        "install_missing_manager_chip": "{name}: installieren",
         "installing_now": "Wird installiert",
         "installed": "Installiert",
         "installed_load_failed": "Installierte Pakete konnten nicht geladen werden.",
@@ -238,6 +241,7 @@ TRANSLATIONS = {
         "update_all": "Alle aktualisieren",
         "update_failed": "Aktualisierung fehlgeschlagen: {error}",
         "update_started": "Aktualisierung gestartet: {source}",
+        "updating_now": "Wird aktualisiert...",
         "updates_check_failed": "Updates konnten nicht geprüft werden: {error}",
         "updates_found": "{count} Updates verfügbar",
         "checking_updates": "Updates werden gesucht...",
@@ -962,11 +966,6 @@ class MainWindow(Gtk.ApplicationWindow):
         self.updates_meta = Gtk.Label(label="")
         self.updates_meta.add_css_class("muted")
         update_header.append(self.updates_meta)
-        update_header.append(Gtk.Label(label=tr("apps_only")))
-        self.updates_only_gui_switch = Gtk.Switch()
-        self.updates_only_gui_switch.set_active(False)
-        self.updates_only_gui_switch.connect("notify::active", lambda _switch, _param: self.render_updates())
-        update_header.append(self.updates_only_gui_switch)
         refresh = Gtk.Button(label=tr("refresh"))
         refresh.add_css_class("secondary")
         refresh.connect("clicked", lambda _button: self.load_updates())
@@ -1073,8 +1072,13 @@ class MainWindow(Gtk.ApplicationWindow):
                 button.remove_css_class("active")
         if view == "installed":
             self.render_installed()
-        if view == "updates" and not self.updates:
-            self.load_updates()
+        if view == "updates":
+            if self.only_gui_switch.get_active():
+                self.only_gui_switch.set_active(False)
+            else:
+                self.render_updates()
+            if not self.updates:
+                self.load_updates()
 
     def on_search_changed(self, _entry: Gtk.SearchEntry) -> None:
         if self.suspend_events:
@@ -1088,6 +1092,8 @@ class MainWindow(Gtk.ApplicationWindow):
         if self.suspend_events:
             return
         self.render_installed()
+        if self.current_view == "updates":
+            self.render_updates()
         if self.current_view == "discover" and len(self.search_entry.get_text().strip()) >= 2:
             self.search_all_sources()
 
@@ -1119,7 +1125,9 @@ class MainWindow(Gtk.ApplicationWindow):
             meta = sources.get(source_id, {})
             chip_text = f"{label}: {tr('ready') if meta.get('available') else tr('missing')}"
             if not meta.get("available") and source_id in installable_managers:
-                chip = Gtk.Button(label=chip_text)
+                manager_name = installable_managers[source_id]
+                chip = Gtk.Button(label=tr("install_missing_manager_chip", name=manager_name))
+                chip.set_tooltip_text(tr("install_missing_manager_prompt", name=manager_name))
                 chip.connect("clicked", lambda _button, selected=source_id, manager_name=installable_managers[source_id]: self.offer_install_manager_tool(selected, manager_name))
             else:
                 chip = Gtk.Label(label=chip_text)
@@ -1224,7 +1232,7 @@ class MainWindow(Gtk.ApplicationWindow):
     def visible_updates(self) -> list[dict[str, Any]]:
         query = self.search_entry.get_text().strip().lower() if self.current_view == "updates" else ""
         items = self.updates
-        if hasattr(self, "updates_only_gui_switch") and self.updates_only_gui_switch.get_active():
+        if self.only_gui_switch.get_active():
             items = [item for item in items if item.get("gui")]
         if query:
             items = [
@@ -1242,14 +1250,14 @@ class MainWindow(Gtk.ApplicationWindow):
         items = self.visible_updates()
         self.updates_meta.set_text(tr("updates_found", count=len(items)) if items else "")
         if not items:
-            self.show_empty(self.updates_list, tr("no_updates"))
+            self.show_empty(self.updates_list, tr("updating_now") if self.pending_update_sources or self.update_source_queue else tr("no_updates"))
             return
         self.clear_list(self.updates_list)
         for item in items:
             row = PackageRow(item, tr("update"), "primary", self.update_package)
             pending = self.pending_update_packages.get(self.package_key(item))
-            if pending:
-                row.set_busy(tr("update"))
+            if pending or item.get("source") in self.pending_update_sources or item.get("source") in self.update_source_queue:
+                row.set_busy(tr("updating_now"))
             self.updates_list.append(row)
 
     def load_installed(self) -> None:
@@ -1346,6 +1354,7 @@ class MainWindow(Gtk.ApplicationWindow):
 
     def update_source(self, source: str, continue_queue: bool = False) -> None:
         self.pending_update_sources.add(source)
+        self.render_updates()
         try:
             label, command = core.update_command(source)
             job = core.start_job(label, command)
@@ -1506,6 +1515,7 @@ class MainWindow(Gtk.ApplicationWindow):
                     self.render_updates()
                 if update_source:
                     self.pending_update_sources.discard(update_source)
+                    self.render_updates()
                 if manager_tool:
                     self.pending_manager_installs.discard(manager_tool)
                     self.refresh_status()

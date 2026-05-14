@@ -129,8 +129,10 @@ TRANSLATIONS = {
         "no_job_output": "The package manager did not return any additional output.",
         "no_results": "No results in the available sources.",
         "no_updates": "No updates found.",
+        "no_updates_filtered": "No updates match the current search or filter.",
         "no": "No",
         "pkexec_missing": "pkexec is missing. Install polkit/pkexec for graphical admin prompts.",
+        "sudo_askpass_unsupported": "pkexec is missing and this sudo does not support askpass (-A). Install polkit/pkexec or a sudo build with askpass support.",
         "ready": "ready",
         "refresh": "Refresh",
         "remove": "Remove",
@@ -230,8 +232,10 @@ TRANSLATIONS = {
         "no_job_output": "Der Paketmanager hat keine weiteren Details ausgegeben.",
         "no_results": "Keine Treffer in den verfügbaren Quellen.",
         "no_updates": "Keine Updates gefunden.",
+        "no_updates_filtered": "Keine Updates passen zur aktuellen Suche oder zum Filter.",
         "no": "Nein",
         "pkexec_missing": "pkexec fehlt. Installiere polkit/pkexec für grafische Admin-Abfragen.",
+        "sudo_askpass_unsupported": "pkexec fehlt und dieses sudo unterstützt kein Askpass (-A). Installiere polkit/pkexec oder ein sudo mit Askpass-Unterstützung.",
         "ready": "bereit",
         "refresh": "Aktualisieren",
         "remove": "Deinstallieren",
@@ -1306,7 +1310,10 @@ class MainWindow(Gtk.ApplicationWindow):
         items = self.visible_updates()
         self.updates_meta.set_text(tr("updates_found", count=len(items)) if items else "")
         if not items:
-            self.show_empty(self.updates_list, tr("updating_now") if self.pending_update_sources or self.update_source_queue else tr("no_updates"))
+            query = self.search_entry.get_text().strip()
+            filtered = bool(self.updates and (query or self.only_gui_switch.get_active()))
+            message = tr("updating_now") if self.pending_update_sources or self.update_source_queue else tr("no_updates_filtered" if filtered else "no_updates")
+            self.show_empty(self.updates_list, message)
             return
         self.clear_list(self.updates_list)
         for item in items:
@@ -1699,18 +1706,6 @@ class MainWindow(Gtk.ApplicationWindow):
         def admin() -> str:
             if os.geteuid() == 0:
                 return tr("admin_already_root")
-            if os.environ.get("SUDO_ASKPASS") and core.which("sudo"):
-                proc = subprocess.run(
-                    ["sudo", "-A", "-v"],
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    check=False,
-                    timeout=180,
-                )
-                if proc.returncode == 0:
-                    return tr("admin_sudo_authorized")
-                return tr("admin_sudo_not_confirmed")
             if core.which("pkexec"):
                 proc = subprocess.run(
                     ["pkexec", "true"],
@@ -1723,8 +1718,20 @@ class MainWindow(Gtk.ApplicationWindow):
                 if proc.returncode == 0:
                     return tr("admin_authorized")
                 return tr("admin_not_confirmed")
+            if core.sudo_askpass_ready():
+                proc = subprocess.run(
+                    ["sudo", "-A", "-v"],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                    timeout=180,
+                )
+                if proc.returncode == 0:
+                    return tr("admin_sudo_authorized")
+                return tr("admin_sudo_not_confirmed")
             if core.which("sudo"):
-                return tr("pkexec_missing")
+                return tr("sudo_askpass_unsupported")
             return tr("unknown_admin")
 
         def done(message: Any, error: Exception | None) -> bool:

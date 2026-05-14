@@ -329,6 +329,10 @@ def packagekit_available_for_source(source: str) -> bool:
     return source in PACKAGEKIT_SOURCE_ORDER and packagekit_available() and native_adapter_available(source)
 
 
+def packagekit_preferred_for_source(source: str) -> bool:
+    return packagekit_available_for_source(source)
+
+
 def require_packagekit(source: str = "") -> str:
     pkcon = which("pkcon")
     if not pkcon:
@@ -346,6 +350,18 @@ def packagekit_command(action: str, packages: list[str] | None = None, force_ref
     if packages:
         command.extend(packages)
     return command
+
+
+def shell_command(command: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in command)
+
+
+def command_with_fallback(primary: list[str], fallback: list[str], message: str = "PackageKit failed, retrying with the native package manager.") -> list[str]:
+    return [
+        "sh",
+        "-c",
+        f"{shell_command(primary)} || {{ printf '%s\\n' {shlex.quote(message)}; {shell_command(fallback)}; }}",
+    ]
 
 
 def apk_available() -> bool:
@@ -417,19 +433,26 @@ def native_install_command(packages: dict[str, list[str]], label: str) -> tuple[
     names = packages.get(source)
     if not source or not names:
         raise ApiError("No supported system package manager was found for this installer.", 404)
-    if packagekit_available_for_source(source):
-        return label, packagekit_command("install", names)
     if source == "apt":
         require_apt()
-        return label, privileged(["apt-get", "install", "-y", *names])
+        fallback = privileged(["apt-get", "install", "-y", *names])
+        if packagekit_preferred_for_source(source):
+            return label, command_with_fallback(packagekit_command("install", names), fallback)
+        return label, fallback
     if source == "dnf":
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
-        return label, privileged([dnf, "install", "-y", *names])
+        fallback = privileged([dnf, "install", "-y", *names])
+        if packagekit_preferred_for_source(source):
+            return label, command_with_fallback(packagekit_command("install", names), fallback)
+        return label, fallback
     if source == "zypper":
         require_binary("zypper")
-        return label, privileged(["zypper", "--non-interactive", "install", *names])
+        fallback = privileged(["zypper", "--non-interactive", "install", *names])
+        if packagekit_preferred_for_source(source):
+            return label, command_with_fallback(packagekit_command("install", names), fallback)
+        return label, fallback
     if source == "pacman":
         require_binary("pacman")
         return label, privileged(["pacman", "-S", "--needed", "--noconfirm", *names])
@@ -462,13 +485,27 @@ def slugify(value: str) -> str:
 def privileged(command: list[str]) -> list[str]:
     if os.geteuid() == 0:
         return command
-    if os.environ.get("SUDO_ASKPASS") and which("sudo"):
-        return ["sudo", "-A", *command]
     if which("pkexec"):
         return ["pkexec", *command]
+    if sudo_askpass_ready():
+        return ["sudo", "-A", *command]
     if which("sudo"):
         return ["sudo", *command]
     raise ApiError("Neither pkexec nor sudo was found.")
+
+
+def sudo_supports_askpass() -> bool:
+    sudo = which("sudo")
+    if not sudo:
+        return False
+    code, output = run_capture([sudo, "-h"], timeout=5)
+    if code not in (0, 1):
+        return False
+    return bool(re.search(r"(^|[^A-Za-z0-9])(-A|--askpass)([^A-Za-z0-9]|$)", output))
+
+
+def sudo_askpass_ready() -> bool:
+    return bool(os.environ.get("SUDO_ASKPASS") and sudo_supports_askpass())
 
 
 def read_registry() -> dict[str, Any]:
@@ -967,7 +1004,7 @@ def list_pacman_installed(aur_only: bool = False) -> list[dict[str, Any]]:
 
 
 def list_apt_installed() -> list[dict[str, Any]]:
-    if packagekit_available_for_source("apt"):
+    if packagekit_preferred_for_source("apt"):
         items = list_packagekit_installed("apt")
         if items is not None:
             return items
@@ -985,7 +1022,7 @@ def list_apt_installed() -> list[dict[str, Any]]:
 
 
 def list_rpm_installed(source: str) -> list[dict[str, Any]]:
-    if packagekit_available_for_source(source):
+    if packagekit_preferred_for_source(source):
         items = list_packagekit_installed(source)
         if items is not None:
             return items
@@ -1299,6 +1336,11 @@ def parse_packagekit_package_line(line: str, source: str) -> dict[str, Any] | No
     if not name or name.lower() in {"package", "loading", "querying", "refreshing", "finished"}:
         return None
     version = package_parts[1].strip() if len(package_parts) > 1 else ""
+    if source == "apt" and not version:
+        match = re.match(r"^(?P<name>.+)-(?P<version>[0-9][A-Za-z0-9.+:~-]*)\.(?P<arch>[A-Za-z0-9][A-Za-z0-9_-]*)$", name)
+        if match:
+            name = match.group("name")
+            version = match.group("version")
     return {
         "name": name,
         "packageName": name,
@@ -1557,12 +1599,13 @@ def search_packages(source: str, query: str) -> list[dict[str, Any]]:
     if len(query) < 2:
         return []
     if source == "apt":
-        items = search_packagekit_packages("apt", query)
-        if items is not None:
-            return items
         require_apt()
+        items = search_packagekit_packages("apt", query) if packagekit_preferred_for_source("apt") else None
         code, output = run_capture(["apt-cache", "search", query], timeout=30)
-        return parse_apt_search(output) if code in (0, 1) else []
+        native_items = parse_apt_search(output) if code in (0, 1) else []
+        if native_items:
+            return native_items
+        return items or []
     if source == "dnf":
         items = search_packagekit_packages("dnf", query)
         if items is not None:
@@ -1712,22 +1755,25 @@ def search_all_packages(query: str, include_non_gui: bool = True) -> list[dict[s
 def install_command(source: str, name: str) -> tuple[str, list[str]]:
     package = validate_package_name(name)
     if source == "apt":
-        if packagekit_available_for_source("apt"):
-            return f"PackageKit installs {package}", packagekit_command("install", [package])
         require_apt()
-        return f"APT installs {package}", privileged(["apt-get", "install", "-y", package])
+        fallback = privileged(["apt-get", "install", "-y", package])
+        if packagekit_preferred_for_source("apt"):
+            return f"PackageKit installs {package}", command_with_fallback(packagekit_command("install", [package]), fallback)
+        return f"APT installs {package}", fallback
     if source == "dnf":
-        if packagekit_available_for_source("dnf"):
-            return f"PackageKit installs {package}", packagekit_command("install", [package])
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
-        return f"dnf installs {package}", privileged([dnf, "install", "-y", package])
+        fallback = privileged([dnf, "install", "-y", package])
+        if packagekit_preferred_for_source("dnf"):
+            return f"PackageKit installs {package}", command_with_fallback(packagekit_command("install", [package]), fallback)
+        return f"dnf installs {package}", fallback
     if source == "zypper":
-        if packagekit_available_for_source("zypper"):
-            return f"PackageKit installs {package}", packagekit_command("install", [package])
         require_binary("zypper")
-        return f"zypper installs {package}", privileged(["zypper", "--non-interactive", "install", package])
+        fallback = privileged(["zypper", "--non-interactive", "install", package])
+        if packagekit_preferred_for_source("zypper"):
+            return f"PackageKit installs {package}", command_with_fallback(packagekit_command("install", [package]), fallback)
+        return f"zypper installs {package}", fallback
     if source == "pacman":
         require_binary("pacman")
         return f"Pacman installs {package}", privileged(["pacman", "-S", "--needed", "--noconfirm", package])
@@ -1765,22 +1811,25 @@ def install_command(source: str, name: str) -> tuple[str, list[str]]:
 def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
     package = validate_package_name(name)
     if source == "apt":
-        if packagekit_available_for_source("apt"):
-            return f"PackageKit removes {package}", packagekit_command("remove", [package])
         require_apt()
-        return f"APT removes {package}", privileged(["apt-get", "purge", "-y", package])
+        fallback = privileged(["apt-get", "purge", "-y", package])
+        if packagekit_preferred_for_source("apt"):
+            return f"PackageKit removes {package}", command_with_fallback(packagekit_command("remove", [package]), fallback)
+        return f"APT removes {package}", fallback
     if source == "dnf":
-        if packagekit_available_for_source("dnf"):
-            return f"PackageKit removes {package}", packagekit_command("remove", [package])
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
-        return f"dnf removes {package}", privileged([dnf, "remove", "-y", package])
+        fallback = privileged([dnf, "remove", "-y", package])
+        if packagekit_preferred_for_source("dnf"):
+            return f"PackageKit removes {package}", command_with_fallback(packagekit_command("remove", [package]), fallback)
+        return f"dnf removes {package}", fallback
     if source == "zypper":
-        if packagekit_available_for_source("zypper"):
-            return f"PackageKit removes {package}", packagekit_command("remove", [package])
         require_binary("zypper")
-        return f"zypper removes {package}", privileged(["zypper", "--non-interactive", "remove", package])
+        fallback = privileged(["zypper", "--non-interactive", "remove", package])
+        if packagekit_preferred_for_source("zypper"):
+            return f"PackageKit removes {package}", command_with_fallback(packagekit_command("remove", [package]), fallback)
+        return f"zypper removes {package}", fallback
     if source == "pacman":
         require_binary("pacman")
         return f"Pacman removes {package}", privileged(["pacman", "-Rns", "--noconfirm", package])
@@ -1819,37 +1868,40 @@ def uninstall_command(source: str, name: str) -> tuple[str, list[str]]:
 def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
     package = validate_package_name(name) if name else ""
     if source == "apt":
-        if packagekit_available_for_source("apt"):
-            return (
-                f"PackageKit updates {package}" if package else "PackageKit updates packages",
-                packagekit_command("update", [package] if package else None),
-            )
         require_apt()
-        if package:
-            return f"APT updates {package}", privileged(["apt-get", "install", "--only-upgrade", "-y", package])
-        return "APT updates packages", privileged(["sh", "-c", "apt-get update && apt-get upgrade -y"])
-    if source == "dnf":
-        if packagekit_available_for_source("dnf"):
+        fallback = privileged(["apt-get", "install", "--only-upgrade", "-y", package]) if package else privileged(["sh", "-c", "apt-get update && apt-get upgrade -y"])
+        if packagekit_preferred_for_source("apt"):
             return (
                 f"PackageKit updates {package}" if package else "PackageKit updates packages",
-                packagekit_command("update", [package] if package else None),
+                command_with_fallback(packagekit_command("update", [package] if package else None), fallback),
             )
+        if package:
+            return f"APT updates {package}", fallback
+        return "APT updates packages", fallback
+    if source == "dnf":
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
-        if package:
-            return f"dnf updates {package}", privileged([dnf, "upgrade", "-y", package])
-        return "dnf updates packages", privileged([dnf, "upgrade", "-y"])
-    if source == "zypper":
-        if packagekit_available_for_source("zypper"):
+        fallback = privileged([dnf, "upgrade", "-y", package]) if package else privileged([dnf, "upgrade", "-y"])
+        if packagekit_preferred_for_source("dnf"):
             return (
                 f"PackageKit updates {package}" if package else "PackageKit updates packages",
-                packagekit_command("update", [package] if package else None),
+                command_with_fallback(packagekit_command("update", [package] if package else None), fallback),
             )
-        require_binary("zypper")
         if package:
-            return f"Zypper updates {package}", privileged(["zypper", "--non-interactive", "update", package])
-        return "Zypper updates packages", privileged(["zypper", "--non-interactive", "update"])
+            return f"dnf updates {package}", fallback
+        return "dnf updates packages", fallback
+    if source == "zypper":
+        require_binary("zypper")
+        fallback = privileged(["zypper", "--non-interactive", "update", package]) if package else privileged(["zypper", "--non-interactive", "update"])
+        if packagekit_preferred_for_source("zypper"):
+            return (
+                f"PackageKit updates {package}" if package else "PackageKit updates packages",
+                command_with_fallback(packagekit_command("update", [package] if package else None), fallback),
+            )
+        if package:
+            return f"Zypper updates {package}", fallback
+        return "Zypper updates packages", fallback
     if source == "pacman":
         require_binary("pacman")
         if package:
@@ -1909,22 +1961,25 @@ def update_command(source: str, name: str = "") -> tuple[str, list[str]]:
 def refresh_metadata_command(source: str | None = None) -> tuple[str, list[str]]:
     source = source or native_package_source()
     if source == "apt":
-        if packagekit_available_for_source("apt"):
-            return "PackageKit refreshes package databases", packagekit_command("refresh", force_refresh=True)
         require_apt()
-        return "APT refreshes package databases", privileged(["apt-get", "update"])
+        fallback = privileged(["apt-get", "update"])
+        if packagekit_preferred_for_source("apt"):
+            return "PackageKit refreshes package databases", command_with_fallback(packagekit_command("refresh", force_refresh=True), fallback)
+        return "APT refreshes package databases", fallback
     if source == "dnf":
-        if packagekit_available_for_source("dnf"):
-            return "PackageKit refreshes package databases", packagekit_command("refresh", force_refresh=True)
         dnf = dnf_binary()
         if not dnf:
             raise ApiError("dnf is not installed or not in PATH.", 404)
-        return "dnf refreshes package databases", privileged([dnf, "makecache", "-y"])
+        fallback = privileged([dnf, "makecache", "-y"])
+        if packagekit_preferred_for_source("dnf"):
+            return "PackageKit refreshes package databases", command_with_fallback(packagekit_command("refresh", force_refresh=True), fallback)
+        return "dnf refreshes package databases", fallback
     if source == "zypper":
-        if packagekit_available_for_source("zypper"):
-            return "PackageKit refreshes package databases", packagekit_command("refresh", force_refresh=True)
         require_binary("zypper")
-        return "Zypper refreshes package databases", privileged(["zypper", "--non-interactive", "refresh"])
+        fallback = privileged(["zypper", "--non-interactive", "refresh"])
+        if packagekit_preferred_for_source("zypper"):
+            return "PackageKit refreshes package databases", command_with_fallback(packagekit_command("refresh", force_refresh=True), fallback)
+        return "Zypper refreshes package databases", fallback
     if source == "pacman":
         require_binary("pacman")
         return "Pacman refreshes package databases", privileged(["pacman", "-Sy", "--noconfirm"])
@@ -2121,14 +2176,15 @@ def parse_pip_updates(output: str) -> list[dict[str, Any]]:
 
 def list_updates(source: str) -> list[dict[str, Any]]:
     if source == "apt":
-        items = list_packagekit_updates("apt")
-        if items is not None:
-            return items
         require_apt()
+        items = list_packagekit_updates("apt") if packagekit_preferred_for_source("apt") else None
         code, output = run_capture(["apt", "list", "--upgradable"], timeout=45)
-        return parse_apt_updates(output) if code in (0, 1) else []
+        native_items = parse_apt_updates(output) if code in (0, 1) else []
+        if native_items:
+            return native_items
+        return items or []
     if source == "dnf":
-        items = list_packagekit_updates("dnf")
+        items = list_packagekit_updates("dnf") if packagekit_preferred_for_source("dnf") else None
         if items is not None:
             return items
         dnf = dnf_binary()
@@ -2137,7 +2193,7 @@ def list_updates(source: str) -> list[dict[str, Any]]:
         code, output = run_capture([dnf, "check-update"], timeout=60)
         return parse_dnf_updates(output) if code in (0, 100) else []
     if source == "zypper":
-        items = list_packagekit_updates("zypper")
+        items = list_packagekit_updates("zypper") if packagekit_preferred_for_source("zypper") else None
         if items is not None:
             return items
         require_binary("zypper")
@@ -2593,7 +2649,7 @@ def uninstall_manual(identifier: str) -> dict[str, Any]:
 
 
 def source_status(available: bool, detail: str, source: str = "") -> dict[str, Any]:
-    if source and packagekit_available_for_source(source):
+    if source and packagekit_preferred_for_source(source):
         return {"available": available, "detail": f"{which('pkcon')} preferred; fallback {detail}"}
     return {"available": available, "detail": detail}
 

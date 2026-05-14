@@ -1144,27 +1144,14 @@ def run_qt_app(args: argparse.Namespace) -> int:
             self.run_async(lambda: core.list_all_updates(include_non_gui=True), done)
 
         def visible_updates(self) -> list[dict[str, Any]]:
-            query = self.search_entry.text().strip().lower() if self.tabs.currentIndex() == 2 else ""
             items = self.updates
-            if self.only_gui_check.isChecked():
-                items = [item for item in items if item.get("gui")]
-            if query:
-                items = [
-                    item
-                    for item in items
-                    if query in str(item.get("name", "")).lower()
-                    or query in str(item.get("source", "")).lower()
-                    or query in str(item.get("packageName", "")).lower()
-                ]
             return items
 
         def render_updates(self) -> None:
             items = self.visible_updates()
             self.updates_meta.setText(tr("updates_found", count=len(items)) if items else "")
             if not items:
-                query = self.search_entry.text().strip()
-                filtered = bool(self.updates and (query or self.only_gui_check.isChecked()))
-                message = tr("updating_now") if self.pending_update_sources else tr("no_updates_filtered" if filtered else "no_updates")
+                message = tr("updating_now") if self.pending_update_sources else tr("no_updates")
                 self.show_empty(self.updates_list, message)
                 return
             self.clear_list(self.updates_list)

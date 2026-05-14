@@ -636,6 +636,7 @@ def run_qt_app(args: argparse.Namespace) -> int:
             self.results: list[dict[str, Any]] = []
             self.installed: list[dict[str, Any]] = []
             self.updates: list[dict[str, Any]] = []
+            self.updates_loading = False
             self.installed_keys: set[tuple[str, str]] = set()
             self.pending_actions: dict[tuple[str, str], str] = {}
             self.pending_update_packages: dict[tuple[str, str], str] = {}
@@ -1131,12 +1132,22 @@ def run_qt_app(args: argparse.Namespace) -> int:
                 self.add_row(self.installed_list, PackageRow(item, tr("remove"), "danger", self.uninstall_package))
 
         def load_updates(self) -> None:
-            self.show_empty(self.updates_list, tr("checking_updates"))
+            if self.updates_loading:
+                return
+            self.updates_loading = True
+            if self.updates:
+                self.render_updates()
+            else:
+                self.show_empty(self.updates_list, tr("checking_updates"))
 
             def done(items: Any, error: Exception | None) -> None:
+                self.updates_loading = False
                 if error:
                     self.log(tr("updates_check_failed", error=error))
-                    self.show_empty(self.updates_list, tr("updates_check_failed", error=error))
+                    if self.updates:
+                        self.render_updates()
+                    else:
+                        self.show_empty(self.updates_list, tr("updates_check_failed", error=error))
                     return
                 self.updates = items
                 self.render_updates()
@@ -1149,9 +1160,16 @@ def run_qt_app(args: argparse.Namespace) -> int:
 
         def render_updates(self) -> None:
             items = self.visible_updates()
-            self.updates_meta.setText(tr("updates_found", count=len(items)) if items else "")
+            if self.updates_loading:
+                meta = tr("updates_found", count=len(items)) if items else ""
+                self.updates_meta.setText(f"{meta} - {tr('checking_updates')}" if meta else tr("checking_updates"))
+            else:
+                self.updates_meta.setText(tr("updates_found", count=len(items)) if items else "")
             if not items:
-                message = tr("updating_now") if self.pending_update_sources else tr("no_updates")
+                if self.updates_loading:
+                    message = tr("checking_updates")
+                else:
+                    message = tr("updating_now") if self.pending_update_sources else tr("no_updates")
                 self.show_empty(self.updates_list, message)
                 return
             self.clear_list(self.updates_list)

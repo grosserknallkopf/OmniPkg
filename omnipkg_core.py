@@ -472,6 +472,10 @@ def validate_package_name(name: str) -> str:
     name = name.strip()
     if not name or not PACKAGE_RE.match(name):
         raise ApiError("Invalid package name.")
+    if any(part in {".", ".."} for part in name.split("/")):
+        raise ApiError("Invalid package name.")
+    if "/" in name and not re.match(r"^@[A-Za-z0-9._+-]+/[A-Za-z0-9._+-]+$", name):
+        raise ApiError("Invalid package name.")
     return name
 
 
@@ -666,14 +670,28 @@ def safe_path(value: str) -> Path:
     return path
 
 
+def path_is_inside(path: Path, parent: Path) -> bool:
+    return path == parent or parent in path.parents
+
+
 def safe_extract_tar(archive: Path, target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive) as tar:
         target_resolved = target.resolve()
         for member in tar.getmembers():
             member_path = (target / member.name).resolve()
-            if target_resolved not in member_path.parents and member_path != target_resolved:
+            if not path_is_inside(member_path, target_resolved):
                 raise ApiError("Archive contains unsafe paths.")
+            if member.isdev():
+                raise ApiError("Archive contains unsupported device files.")
+            if member.issym() or member.islnk():
+                link_target = Path(member.linkname)
+                if member.issym() and not link_target.is_absolute():
+                    link_path = (member_path.parent / link_target).resolve()
+                else:
+                    link_path = (target_resolved / link_target).resolve()
+                if not path_is_inside(link_path, target_resolved):
+                    raise ApiError("Archive contains unsafe links.")
         tar.extractall(target)
 
 
@@ -683,7 +701,7 @@ def safe_extract_zip(archive: Path, target: Path) -> None:
         target_resolved = target.resolve()
         for member in zip_ref.namelist():
             member_path = (target / member).resolve()
-            if target_resolved not in member_path.parents and member_path != target_resolved:
+            if not path_is_inside(member_path, target_resolved):
                 raise ApiError("Archive contains unsafe paths.")
         zip_ref.extractall(target)
 

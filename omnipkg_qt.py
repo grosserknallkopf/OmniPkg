@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -298,10 +297,8 @@ def load_qt() -> dict[str, Any]:
                     QWidget,
                 )
 
-                align_left = Qt.AlignmentFlag.AlignLeft
                 align_center = Qt.AlignmentFlag.AlignCenter
                 align_right = Qt.AlignmentFlag.AlignRight
-                align_vcenter = Qt.AlignmentFlag.AlignVCenter
             elif binding == "PySide6":
                 from PySide6.QtCore import QObject, Qt, QTimer, Signal
                 from PySide6.QtGui import QIcon, QPixmap
@@ -330,10 +327,8 @@ def load_qt() -> dict[str, Any]:
                     QWidget,
                 )
 
-                align_left = Qt.AlignmentFlag.AlignLeft
                 align_center = Qt.AlignmentFlag.AlignCenter
                 align_right = Qt.AlignmentFlag.AlignRight
-                align_vcenter = Qt.AlignmentFlag.AlignVCenter
             elif binding == "PyQt5":
                 from PyQt5.QtCore import QObject, Qt, QTimer, pyqtSignal as Signal
                 from PyQt5.QtGui import QIcon, QPixmap
@@ -362,10 +357,8 @@ def load_qt() -> dict[str, Any]:
                     QWidget,
                 )
 
-                align_left = Qt.AlignLeft
                 align_center = Qt.AlignCenter
                 align_right = Qt.AlignRight
-                align_vcenter = Qt.AlignVCenter
             else:
                 from PySide2.QtCore import QObject, Qt, QTimer, Signal
                 from PySide2.QtGui import QIcon, QPixmap
@@ -394,11 +387,40 @@ def load_qt() -> dict[str, Any]:
                     QWidget,
                 )
 
-                align_left = Qt.AlignLeft
                 align_center = Qt.AlignCenter
                 align_right = Qt.AlignRight
-                align_vcenter = Qt.AlignVCenter
-            return locals()
+            return {
+                "binding": binding,
+                "QApplication": QApplication,
+                "QCheckBox": QCheckBox,
+                "QComboBox": QComboBox,
+                "QDialog": QDialog,
+                "QFileDialog": QFileDialog,
+                "QFormLayout": QFormLayout,
+                "QFrame": QFrame,
+                "QGridLayout": QGridLayout,
+                "QHBoxLayout": QHBoxLayout,
+                "QIcon": QIcon,
+                "QLabel": QLabel,
+                "QLineEdit": QLineEdit,
+                "QListWidget": QListWidget,
+                "QListWidgetItem": QListWidgetItem,
+                "QMainWindow": QMainWindow,
+                "QMessageBox": QMessageBox,
+                "QObject": QObject,
+                "QPixmap": QPixmap,
+                "QPushButton": QPushButton,
+                "QScrollArea": QScrollArea,
+                "QSizePolicy": QSizePolicy,
+                "QTabWidget": QTabWidget,
+                "QTextEdit": QTextEdit,
+                "QTimer": QTimer,
+                "QVBoxLayout": QVBoxLayout,
+                "QWidget": QWidget,
+                "Signal": Signal,
+                "align_center": align_center,
+                "align_right": align_right,
+            }
         except ImportError as exc:
             errors.append(f"{binding}: {exc}")
     raise RuntimeError("No supported Qt Python binding found. Install PyQt6, PySide6, PyQt5 or PySide2.\n" + "\n".join(errors))
@@ -515,10 +537,8 @@ def run_qt_app(args: argparse.Namespace) -> int:
     QTimer = qt["QTimer"]
     QVBoxLayout = qt["QVBoxLayout"]
     QWidget = qt["QWidget"]
-    align_left = qt["align_left"]
     align_center = qt["align_center"]
     align_right = qt["align_right"]
-    align_vcenter = qt["align_vcenter"]
 
     class AsyncCall(QObject):
         finished = Signal(object, object)

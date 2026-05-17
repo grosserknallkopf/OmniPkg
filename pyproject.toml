@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omnipkg"
+version = "0.1.0"
+description = "Native Linux software manager for multiple package ecosystems."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "OmniPkg contributors" }]
+keywords = ["linux", "package-manager", "desktop", "flatpak", "snap"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: GTK",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Desktop Environment",
+  "Topic :: System :: Software Distribution",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2",
+  "ruff>=0.8",
+]
+qt = [
+  "PyQt6>=6.6",
+]
+pyside = [
+  "PySide6>=6.6",
+]
+
+[project.scripts]
+omnipkg = "omnipkg:main"
+
+[project.urls]
+Homepage = "https://github.com/grosserknallkopf/OmniPkg"
+Repository = "https://github.com/grosserknallkopf/OmniPkg"
+Issues = "https://github.com/grosserknallkopf/OmniPkg/issues"
+
+[tool.setuptools]
+py-modules = [
+  "omnipkg",
+  "omnipkg_core",
+  "omnipkg_desktop",
+  "omnipkg_qt",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

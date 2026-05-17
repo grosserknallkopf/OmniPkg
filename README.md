@@ -173,6 +173,23 @@ Pacman once, the AUR helper once, Flatpak once, npm once and pipx once. Batch
 failures are collected into one error dialog instead of producing a stream of
 popups.
 
+## OmniPkg and topgrade
+
+[topgrade](https://github.com/topgrade-rs/topgrade) is a strong CLI-first tool
+for updating many parts of a developer machine with one command. If your main
+goal is scripted, terminal-driven update automation, topgrade is probably the
+better fit.
+
+OmniPkg has a narrower and more visual goal: it is a native Linux desktop app
+for discovering, installing, removing and updating software across package
+sources. It tries to show real app names and icons, keeps manual AppImage and
+archive installs in one place, and makes package operations visible instead of
+only batch-oriented.
+
+The overlap is update orchestration. The difference is product shape: topgrade
+is the stronger batch updater; OmniPkg aims to be the calmer graphical software
+manager.
+
 ## Application Names and Icons
 
 OmniPkg reads local desktop launchers from common Linux locations:
@@ -226,17 +243,30 @@ Supported archive formats:
 
 ## Development
 
+Architecture notes live in [ARCHITECTURE.md](ARCHITECTURE.md). Contribution and
+security policies live in [CONTRIBUTING.md](CONTRIBUTING.md) and
+[SECURITY.md](SECURITY.md).
+
 Run from the project directory:
 
 ```bash
 python3 omnipkg.py
 ```
 
-Run quick checks:
+Set up local development tools:
 
 ```bash
-python3 omnipkg_qt.py --check
-python3 omnipkg_desktop.py --check
-python3 -m py_compile omnipkg_core.py omnipkg_qt.py omnipkg_desktop.py omnipkg.py
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+```
+
+Run checks:
+
+```bash
+python -m ruff check .
+python -m pytest
+python -m compileall -q omnipkg.py omnipkg_core.py omnipkg_qt.py omnipkg_desktop.py assets tests
 bash -n install.sh
 ```

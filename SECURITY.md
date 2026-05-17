@@ -12,10 +12,7 @@ releases, please treat the latest `main` commit as the only supported version.
 ## Reporting a Vulnerability
 
 Please do not open a public issue for a suspected vulnerability.
-
-Use GitHub's private vulnerability reporting for this repository if it is
-available. If it is not available, open a minimal public issue asking for a
-private contact channel without including exploit details.
+Use GitHub's private vulnerability reporting for this repository.
 
 Useful reports include:
 

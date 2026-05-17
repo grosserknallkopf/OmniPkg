@@ -17,6 +17,10 @@ managers and manual app installs into one calm desktop interface.
 It is not tied to one distribution. OmniPkg detects what is available on the
 current system and only enables the sources that can actually be used.
 
+<p align="center">
+  <img src="assets/omnipkg_demo.gif" alt="OmniPkg demo" width="900">
+</p>
+
 ## Highlights
 
 - One search across all available sources
